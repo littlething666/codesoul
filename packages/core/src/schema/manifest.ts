@@ -1,6 +1,11 @@
 import { z } from "zod"
 
-export const BatchStatus = z.enum(["pending", "committed", "failed"])
+export const BatchStatus = z.enum([
+	"pending",
+	"committed",
+	"failed",
+	"dry_run",
+])
 export type BatchStatus = z.infer<typeof BatchStatus>
 
 export const BatchManifest = z.object({

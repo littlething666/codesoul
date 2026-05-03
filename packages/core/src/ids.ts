@@ -12,7 +12,13 @@ export type ContentIdInput = {
 	normalizedBody: string
 }
 
-const sha1 = (parts: readonly string[]): string => {
+export type EdgeContentHashInput = {
+	src: string
+	type: string
+	dst: string
+}
+
+export const hashParts = (parts: readonly string[]): string => {
 	const h = createHash("sha1")
 	for (const p of parts) {
 		h.update(p)
@@ -22,10 +28,15 @@ const sha1 = (parts: readonly string[]): string => {
 }
 
 export const stableId = (input: StableIdInput): string =>
-	`sym_${sha1([input.repoId, input.relativePath, input.symbolKind, input.qualifiedName])}`
+	`sym_${hashParts([input.repoId, input.relativePath, input.symbolKind, input.qualifiedName])}`
 
 export const contentId = (input: ContentIdInput): string =>
-	`cnt_${sha1([input.normalizedSignature, input.normalizedBody])}`
+	`cnt_${hashParts([input.normalizedSignature, input.normalizedBody])}`
+
+// Edge identity hash: an edge is a relationship between (src, type, dst),
+// not a copy of the destination's body. Pin this identity explicitly.
+export const edgeContentHash = (input: EdgeContentHashInput): string =>
+	`cnt_${hashParts([input.src, input.type, input.dst])}`
 
 // Whitespace + comment normalization. Line numbers MUST NOT participate in IDs.
 export const normalizeSignature = (raw: string): string =>

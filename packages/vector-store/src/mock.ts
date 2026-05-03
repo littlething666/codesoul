@@ -1,4 +1,5 @@
 import type { VectorRow } from "@codesoul/core"
+import { VectorRow as VectorRowSchema } from "@codesoul/core"
 import type { VectorSearchHit, VectorStore } from "./store.js"
 
 const cosine = (a: number[], b: number[]): number => {
@@ -21,7 +22,8 @@ export class MockVectorStore implements VectorStore {
 	private readonly rows = new Map<string, VectorRow>()
 
 	async upsert(rows: ReadonlyArray<VectorRow>): Promise<void> {
-		for (const r of rows) {
+		for (const raw of rows) {
+			const r = VectorRowSchema.parse(raw)
 			this.rows.set(`${r.nodeId}:${r.payloadKind}`, r)
 		}
 	}

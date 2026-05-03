@@ -1,9 +1,17 @@
-import type { Command } from "commander"
+import { InvalidArgumentError, type Command } from "commander"
 import { retrieve } from "@codesoul/retrieval"
 import type { Phase0Deps } from "../wiring.js"
 
 type QueryOptions = {
-	limit: string
+	limit: number
+}
+
+const parsePositiveInt = (value: string): number => {
+	const n = Number(value)
+	if (!Number.isInteger(n) || n <= 0) {
+		throw new InvalidArgumentError("must be a positive integer")
+	}
+	return n
 }
 
 export const registerQuery = (program: Command, deps: Phase0Deps): void => {
@@ -11,7 +19,7 @@ export const registerQuery = (program: Command, deps: Phase0Deps): void => {
 		.command("query")
 		.description("Run a hybrid retrieval query (Phase 0: mocks only)")
 		.argument("<text>", "query text")
-		.option("--limit <n>", "max snippets", "10")
+		.option("--limit <n>", "max snippets", parsePositiveInt, 10)
 		.action(async (text: string, opts: QueryOptions) => {
 			const bundle = await retrieve(
 				{
@@ -20,7 +28,7 @@ export const registerQuery = (program: Command, deps: Phase0Deps): void => {
 					embedder: deps.embedder,
 					reranker: deps.reranker,
 				},
-				{ query: text, limit: Number(opts.limit) },
+				{ query: text, limit: opts.limit },
 			)
 			console.log(JSON.stringify(bundle, null, 2))
 		})
