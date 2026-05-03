@@ -18,8 +18,12 @@ export type RetrievalInput = {
 }
 
 /**
- * Phase 0 retrieval skeleton: parse → exact → semantic → merge → rerank → assemble.
- * Graph expansion and macro-summary inclusion land in later phases.
+ * Phase 0 retrieval pipeline:
+ *   parse -> exact -> vector -> graph expand -> merge -> rerank -> assemble
+ *
+ * Graph expansion is what makes CodeSoul more than a generic mock RAG: every
+ * exact / semantic hit fans out by 1 hop in both directions to surface code
+ * that is structurally connected to the seed.
  */
 export const retrieve = async (
 	deps: RetrievalDeps,
@@ -48,7 +52,7 @@ export const retrieve = async (
 		}
 	}
 
-	// 3+4. Semantic search
+	// 3. Semantic search (always embed the query in Phase 0).
 	const [embedding] = await deps.embedder.embed([
 		{
 			nodeId: "__query__",
@@ -76,9 +80,33 @@ export const retrieve = async (
 		}
 	}
 
-	// 5. MergeCandidates (dedupe, prefer higher score)
+	// 4. GraphExpand: for each base candidate, fan out one hop in both directions.
+	const baseCandidates = [...exactCandidates, ...semanticCandidates]
+	const seenForExpansion = new Set(baseCandidates.map((c) => c.nodeId))
+	const graphCandidates: Candidate[] = []
+	for (const c of baseCandidates) {
+		const expanded = await deps.graph.neighbors(c.nodeId, {
+			depth: 1,
+			direction: "both",
+			limit: RETRIEVAL_LIMITS.graphExpandedHits,
+		})
+		for (const node of expanded.nodes) {
+			if (node.id === c.nodeId) continue
+			if (seenForExpansion.has(node.id)) continue
+			seenForExpansion.add(node.id)
+			graphCandidates.push({
+				nodeId: node.id,
+				source: "graph",
+				score: Math.max(0, c.score * 0.8),
+				evidencePath: node.path,
+				evidenceLines: [node.evidence.startLine, node.evidence.endLine],
+			})
+		}
+	}
+
+	// 5. MergeCandidates (dedupe; prefer the higher-score source).
 	const merged = new Map<string, Candidate>()
-	for (const c of [...exactCandidates, ...semanticCandidates]) {
+	for (const c of [...exactCandidates, ...semanticCandidates, ...graphCandidates]) {
 		const existing = merged.get(c.nodeId)
 		if (!existing || c.score > existing.score) merged.set(c.nodeId, c)
 	}
