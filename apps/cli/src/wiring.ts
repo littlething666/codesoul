@@ -2,6 +2,8 @@ import type { IndexConfig } from "@codesoul/core"
 import { defaultIndexConfig } from "@codesoul/core"
 import { MockEmbedder } from "@codesoul/embedder/mock"
 import { MockGraphStore } from "@codesoul/graph-store/mock"
+import type { ManifestStore } from "@codesoul/manifest-store"
+import { InMemoryManifestStore } from "@codesoul/manifest-store/memory"
 import { MockParser } from "@codesoul/parser/mock"
 import { MockReranker } from "@codesoul/reranker/mock"
 import { MockRigExtractor } from "@codesoul/rig/mock"
@@ -18,6 +20,7 @@ export type Phase0Deps = {
 	embedder: MockEmbedder
 	reranker: MockReranker
 	summarizer: MockSummarizer
+	manifestStore: ManifestStore
 	indexer: Indexer
 	config: IndexConfig
 }
@@ -30,12 +33,14 @@ export const wirePhase0 = (): Phase0Deps => {
 	const embedder = new MockEmbedder()
 	const reranker = new MockReranker()
 	const summarizer = new MockSummarizer()
+	const manifestStore = new InMemoryManifestStore()
 	const indexer = new FixtureIndexer({
 		parser,
 		rig,
 		graph,
 		vectors,
 		embedder,
+		manifestStore,
 	})
 	return {
 		parser,
@@ -45,6 +50,7 @@ export const wirePhase0 = (): Phase0Deps => {
 		embedder,
 		reranker,
 		summarizer,
+		manifestStore,
 		indexer,
 		config: defaultIndexConfig(),
 	}

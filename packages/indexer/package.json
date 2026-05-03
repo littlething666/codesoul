@@ -22,6 +22,7 @@
     "@codesoul/core": "workspace:*",
     "@codesoul/embedder": "workspace:*",
     "@codesoul/graph-store": "workspace:*",
+    "@codesoul/manifest-store": "workspace:*",
     "@codesoul/parser": "workspace:*",
     "@codesoul/rig": "workspace:*",
     "@codesoul/vector-store": "workspace:*"
