@@ -13,6 +13,7 @@
     "declaration": true,
     "sourceMap": true,
     "resolveJsonModule": true,
-    "esModuleInterop": false
+    "esModuleInterop": true,
+    "ignoreDeprecations": "6.0"
   }
 }
