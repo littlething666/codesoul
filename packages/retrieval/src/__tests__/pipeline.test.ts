@@ -77,18 +77,18 @@ class RecordingReranker extends MockReranker {
 }
 
 describe("retrieve()", () => {
-	it("always embeds the query with __query__ + zero contentHash", async () => {
+	it("embeds the query with kind=query and a queryId", async () => {
 		const graph = new MockGraphStore()
 		const vectors = new MockVectorStore()
 		const embedder = new RecordingEmbedder()
 		const reranker = new MockReranker()
 		await retrieve({ graph, vectors, embedder, reranker }, { query: "greet" })
 		expect(embedder.inputs[0]).toMatchObject({
-			nodeId: "__query__",
-			contentHash: "cnt_0000000000000000000000000000000000000000",
-			payloadKind: "FunctionSummary",
+			kind: "query",
+			queryId: "default",
 			text: "greet",
 		})
+		expect((embedder.inputs[0] as { nodeId?: string }).nodeId).toBeUndefined()
 	})
 
 	it("returns exact lookup hits as snippets", async () => {
@@ -120,7 +120,8 @@ describe("retrieve()", () => {
 		await graph.upsertNodes([foo])
 		const [r] = await embedder.embed([
 			{
-				nodeId: "unrelated",
+				kind: "node",
+				nodeId: SYM("z"),
 				contentHash: CNT("a"),
 				payloadKind: "FunctionSummary",
 				text: "unrelated",

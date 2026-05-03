@@ -26,13 +26,17 @@ export class MockEmbedder implements Embedder {
 			for (let i = 0; i < EMBEDDING_DIM; i++) {
 				vec[i] = valueAt(input.text, i)
 			}
-			return {
-				nodeId: input.nodeId,
+			const base = {
+				inputKind: input.kind,
 				vector: vec,
 				embeddingModel: this.modelId,
 				embeddingRevision: this.modelRevision,
 				embeddingDim: EMBEDDING_DIM,
+			} as const
+			if (input.kind === "node") {
+				return { ...base, nodeId: input.nodeId }
 			}
+			return { ...base, queryId: input.queryId }
 		})
 	}
 }

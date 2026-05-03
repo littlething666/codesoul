@@ -3,7 +3,7 @@ import { CONTEXT_BUDGET_TOKENS, RETRIEVAL_LIMITS } from "@codesoul/core"
 import type { Embedder } from "@codesoul/embedder"
 import type { GraphStore } from "@codesoul/graph-store"
 import type { Reranker } from "@codesoul/reranker"
-import type { VectorStore } from "@codesoul/vector-store"
+import type { VectorStore, VectorSearchFilter } from "@codesoul/vector-store"
 
 export type RetrievalDeps = {
 	graph: GraphStore
@@ -15,15 +15,19 @@ export type RetrievalDeps = {
 export type RetrievalInput = {
 	query: string
 	limit?: number
+	filter?: VectorSearchFilter
 }
 
 /**
- * Phase 0 retrieval pipeline:
+ * Phase 0/0.5 retrieval pipeline:
  *   parse -> exact -> vector -> graph expand -> merge -> rerank -> assemble
  *
  * Graph expansion is what makes CodeSoul more than a generic mock RAG: every
  * exact / semantic hit fans out by 1 hop in both directions to surface code
  * that is structurally connected to the seed.
+ *
+ * The query is embedded with `kind: "query"`; query vectors never land in
+ * the vector store because `VectorRow` is node-shaped only.
  */
 export const retrieve = async (
 	deps: RetrievalDeps,
@@ -55,9 +59,8 @@ export const retrieve = async (
 	// 3. Semantic search (always embed the query in Phase 0).
 	const [embedding] = await deps.embedder.embed([
 		{
-			nodeId: "__query__",
-			contentHash: "cnt_0000000000000000000000000000000000000000",
-			payloadKind: "FunctionSummary",
+			kind: "query",
+			queryId: "default",
 			text: query,
 		},
 	])
@@ -66,6 +69,7 @@ export const retrieve = async (
 		const hits = await deps.vectors.search({
 			vector: embedding.vector,
 			limit: RETRIEVAL_LIMITS.semanticHits,
+			...(input.filter ? { filter: input.filter } : {}),
 		})
 		for (const hit of hits) {
 			const node = await deps.graph.getNode(hit.nodeId)
@@ -80,7 +84,7 @@ export const retrieve = async (
 		}
 	}
 
-	// 4. GraphExpand: for each base candidate, fan out one hop in both directions.
+	// 4. GraphExpand: fan out one hop in both directions for each base candidate.
 	const baseCandidates = [...exactCandidates, ...semanticCandidates]
 	const seenForExpansion = new Set(baseCandidates.map((c) => c.nodeId))
 	const graphCandidates: Candidate[] = []
