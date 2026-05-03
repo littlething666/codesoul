@@ -40,21 +40,20 @@ const SKIP_DIRS = new Set([
 ])
 
 const walk = async (dir: string, out: string[]): Promise<void> => {
-	let entries: Awaited<ReturnType<typeof readdir>>
 	try {
-		entries = await readdir(dir, { withFileTypes: true })
+		const entries = await readdir(dir, { withFileTypes: true })
+		for (const e of entries) {
+			if (e.name.startsWith(".")) continue
+			const full = join(dir, e.name)
+			if (e.isDirectory()) {
+				if (SKIP_DIRS.has(e.name)) continue
+				await walk(full, out)
+			} else if (e.isFile()) {
+				out.push(full)
+			}
+		}
 	} catch {
 		return
-	}
-	for (const e of entries) {
-		if (e.name.startsWith(".")) continue
-		const full = join(dir, e.name)
-		if (e.isDirectory()) {
-			if (SKIP_DIRS.has(e.name)) continue
-			await walk(full, out)
-		} else if (e.isFile()) {
-			out.push(full)
-		}
 	}
 }
 
