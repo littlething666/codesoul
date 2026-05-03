@@ -59,6 +59,9 @@ importers:
       '@codesoul/rig':
         specifier: workspace:*
         version: link:../../packages/rig
+      '@codesoul/summarizer':
+        specifier: workspace:*
+        version: link:../../packages/summarizer
       '@codesoul/vector-store':
         specifier: workspace:*
         version: link:../../packages/vector-store

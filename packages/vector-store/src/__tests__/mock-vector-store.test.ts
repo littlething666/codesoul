@@ -65,6 +65,78 @@ describe("MockVectorStore", () => {
 		expect(hits[0]?.nodeId).toBe(SYM("a"))
 	})
 
+	it("search filters by repoId", async () => {
+		const s = new MockVectorStore()
+		const v = new Array(EMBEDDING_DIM).fill(0)
+		v[0] = 1
+		await s.upsert([
+			row(SYM("a"), "FunctionSummary", v),
+			row(SYM("b"), "FunctionSummary", v, { repoId: "other" }),
+		])
+		const hits = await s.search({
+			vector: v,
+			limit: 10,
+			filter: { repoId: "r" },
+		})
+		expect(hits.map((h) => h.nodeId)).toEqual([SYM("a")])
+	})
+
+	it("search filters by indexRunId", async () => {
+		const s = new MockVectorStore()
+		const v = new Array(EMBEDDING_DIM).fill(0)
+		v[0] = 1
+		await s.upsert([
+			row(SYM("a"), "FunctionSummary", v),
+			row(SYM("b"), "FunctionSummary", v, { indexRunId: "run_other" }),
+		])
+		const hits = await s.search({
+			vector: v,
+			limit: 10,
+			filter: { indexRunId: "run_t" },
+		})
+		expect(hits.map((h) => h.nodeId)).toEqual([SYM("a")])
+	})
+
+	it("search filters by payloadKind", async () => {
+		const s = new MockVectorStore()
+		const v = new Array(EMBEDDING_DIM).fill(0)
+		v[0] = 1
+		await s.upsert([
+			row(SYM("a"), "FunctionSummary", v),
+			row(SYM("a"), "Block", v),
+		])
+		const hits = await s.search({
+			vector: v,
+			limit: 10,
+			filter: { payloadKind: "Block" },
+		})
+		expect(hits.length).toBe(1)
+		expect(hits[0]?.payloadKind).toBe("Block")
+	})
+
+	it("listByRun returns rows for the run only", async () => {
+		const s = new MockVectorStore()
+		await s.upsert([
+			row(SYM("a")),
+			row(SYM("b"), "FunctionSummary", new Array(EMBEDDING_DIM).fill(0), {
+				indexRunId: "run_other",
+			}),
+		])
+		const rows = await s.listByRun("run_t")
+		expect(rows.length).toBe(1)
+		expect(rows[0]?.nodeId).toBe(SYM("a"))
+	})
+
+	it("listByRun honors limit", async () => {
+		const s = new MockVectorStore()
+		await s.upsert([
+			row(SYM("a")),
+			row(SYM("b"), "Block"),
+			row(SYM("c"), "Markdown"),
+		])
+		expect((await s.listByRun("run_t", { limit: 2 })).length).toBe(2)
+	})
+
 	it("zero-vector cosine is 0", async () => {
 		const s = new MockVectorStore()
 		const v = new Array(EMBEDDING_DIM).fill(0)

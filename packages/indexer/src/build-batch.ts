@@ -30,6 +30,9 @@ export type BuildBatchResult = {
  *
  * Given files already loaded into memory, parses each one and emits the nodes,
  * edges, and EmbedInput payloads that should be persisted in this batch.
+ *
+ * EmbedInputs emitted here are always `kind: "node"`. Query embeddings live
+ * in the retrieval pipeline.
  */
 export const buildBatch = async (
 	parser: Parser,
@@ -54,6 +57,7 @@ export const buildBatch = async (
 		for (const n of result.nodes) {
 			if (n.kind === "Function" || n.kind === "Method" || n.kind === "Class") {
 				vectorInputs.push({
+					kind: "node",
 					nodeId: n.id,
 					contentHash: n.contentHash,
 					payloadKind: "FunctionSummary",

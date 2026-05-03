@@ -3,6 +3,7 @@ import { readFile, readdir, stat } from "node:fs/promises"
 import { extname, join, relative } from "node:path"
 import type {
 	BatchManifest,
+	EmbeddingResult,
 	Language,
 	VectorRow,
 } from "@codesoul/core"
@@ -68,8 +69,37 @@ const checksum = (parts: ReadonlyArray<string>): string => {
 	return h.digest("hex")
 }
 
-const sourceContentHash = (repoPath: string): string =>
-	`cnt_${createHash("sha1").update(repoPath).digest("hex")}`
+const sha1 = (text: string): string =>
+	createHash("sha1").update(text).digest("hex")
+
+type SourceFileDigest = {
+	relativePath: string
+	sha1: string
+}
+
+/**
+ * Hash the (relativePath, fileSha1) tuples sorted by relativePath.
+ *
+ * Hashing only the absolute repo path (the prior behavior) was wrong:
+ * the manifest hash should change when file contents change and remain
+ * stable when the repo is moved. This function is now defined entirely
+ * in terms of relative paths and content digests.
+ */
+const sourceTreeContentHash = (
+	files: ReadonlyArray<SourceFileDigest>,
+): string => {
+	const sorted = [...files].sort((a, b) =>
+		a.relativePath.localeCompare(b.relativePath),
+	)
+	const h = createHash("sha1")
+	for (const f of sorted) {
+		h.update(f.relativePath)
+		h.update("\u0000")
+		h.update(f.sha1)
+		h.update("\u0000")
+	}
+	return `cnt_${h.digest("hex")}`
+}
 
 export type FixtureIndexerDeps = IndexerDeps & {
 	clock?: Clock
@@ -99,6 +129,7 @@ export class FixtureIndexer implements Indexer {
 		filePaths.sort()
 
 		const loaded: BuildBatchFile[] = []
+		const digests: SourceFileDigest[] = []
 		for (const filePath of filePaths) {
 			const ext = extname(filePath).toLowerCase()
 			const language = LANG_BY_EXT[ext]
@@ -109,6 +140,7 @@ export class FixtureIndexer implements Indexer {
 				.split(/[\\/]/)
 				.join("/")
 			loaded.push({ path: relPath, language, source })
+			digests.push({ relativePath: relPath, sha1: sha1(source) })
 		}
 
 		const { nodes, edges, vectorInputs } = await buildBatch(this.deps.parser, {
@@ -121,8 +153,12 @@ export class FixtureIndexer implements Indexer {
 		const allVectors: VectorRow[] = []
 		if (vectorInputs.length > 0) {
 			const embeds = await this.deps.embedder.embed(vectorInputs)
-			const byNode = new Map(embeds.map((e) => [e.nodeId, e]))
+			const byNode = new Map<string, EmbeddingResult>()
+			for (const e of embeds) {
+				if (e.inputKind === "node" && e.nodeId) byNode.set(e.nodeId, e)
+			}
 			for (const inp of vectorInputs) {
+				if (inp.kind !== "node") continue
 				const e = byNode.get(inp.nodeId)
 				if (!e) continue
 				const node = nodes.find((n) => n.id === inp.nodeId)
@@ -155,7 +191,7 @@ export class FixtureIndexer implements Indexer {
 			indexRunId: input.indexRunId,
 			repoId: input.repoId,
 			sourcePath: input.repoPath,
-			sourceContentHash: sourceContentHash(input.repoPath),
+			sourceContentHash: sourceTreeContentHash(digests),
 			status: input.dryRun ? "dry_run" : "committed",
 			nodeCount: nodes.length,
 			edgeCount: edges.length,

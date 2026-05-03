@@ -15,12 +15,14 @@ import {
 	VectorRow,
 } from "../schema/index.js"
 import {
+	cntLikeId,
 	makeBatchManifest,
 	makeCandidate,
 	makeGraphEdge,
 	makeGraphNode,
 	makeMeta,
 	makeVectorRow,
+	symLikeId,
 } from "./builders.js"
 
 describe("PersistedMeta", () => {
@@ -146,22 +148,57 @@ describe("RigGraph", () => {
 })
 
 describe("EmbedInput / EmbeddingResult", () => {
-	it("accepts a valid input", () => {
+	it("accepts a node-kind input with valid sym/cnt ids", () => {
 		expect(() =>
 			EmbedInput.parse({
-				nodeId: "x",
-				contentHash: "y",
+				kind: "node",
+				nodeId: symLikeId("a"),
+				contentHash: cntLikeId("a"),
 				payloadKind: "FunctionSummary",
 				text: "hello",
 			}),
 		).not.toThrow()
 	})
 
-	it("rejects unknown payloadKind", () => {
+	it("accepts a query-kind input", () => {
 		expect(() =>
 			EmbedInput.parse({
+				kind: "query",
+				queryId: "q1",
+				text: "greet",
+			}),
+		).not.toThrow()
+	})
+
+	it("rejects a node input with malformed nodeId", () => {
+		expect(() =>
+			EmbedInput.parse({
+				kind: "node",
 				nodeId: "x",
-				contentHash: "y",
+				contentHash: cntLikeId("a"),
+				payloadKind: "FunctionSummary",
+				text: "hello",
+			}),
+		).toThrow()
+	})
+
+	it("rejects a node input without kind", () => {
+		expect(() =>
+			EmbedInput.parse({
+				nodeId: symLikeId("a"),
+				contentHash: cntLikeId("a"),
+				payloadKind: "FunctionSummary",
+				text: "hello",
+			}),
+		).toThrow()
+	})
+
+	it("rejects unknown payloadKind on node input", () => {
+		expect(() =>
+			EmbedInput.parse({
+				kind: "node",
+				nodeId: symLikeId("a"),
+				contentHash: cntLikeId("a"),
 				payloadKind: "Bogus",
 				text: "hello",
 			}),
@@ -171,13 +208,27 @@ describe("EmbedInput / EmbeddingResult", () => {
 	it("validates EmbeddingResult vector length", () => {
 		expect(() =>
 			EmbeddingResult.parse({
-				nodeId: "x",
+				inputKind: "node",
+				nodeId: symLikeId("a"),
 				vector: new Array(EMBEDDING_DIM - 1).fill(0),
 				embeddingModel: "m",
 				embeddingRevision: "0",
 				embeddingDim: EMBEDDING_DIM,
 			}),
 		).toThrow()
+	})
+
+	it("accepts an EmbeddingResult for a query input", () => {
+		expect(() =>
+			EmbeddingResult.parse({
+				inputKind: "query",
+				queryId: "q1",
+				vector: new Array(EMBEDDING_DIM).fill(0),
+				embeddingModel: "m",
+				embeddingRevision: "0",
+				embeddingDim: EMBEDDING_DIM,
+			}),
+		).not.toThrow()
 	})
 })
 

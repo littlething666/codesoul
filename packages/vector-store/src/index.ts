@@ -1,1 +1,5 @@
-export type { VectorSearchHit, VectorStore } from "./store.js"
+export type {
+	VectorSearchFilter,
+	VectorSearchHit,
+	VectorStore,
+} from "./store.js"

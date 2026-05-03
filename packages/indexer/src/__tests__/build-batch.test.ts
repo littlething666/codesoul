@@ -21,7 +21,10 @@ describe("buildBatch", () => {
 		expect(a.nodes.length).toBeGreaterThan(0)
 		expect(a.vectorInputs.length).toBeGreaterThan(0)
 		for (const v of a.vectorInputs) {
-			expect(v.payloadKind).toBe("FunctionSummary")
+			expect(v.kind).toBe("node")
+			if (v.kind === "node") {
+				expect(v.payloadKind).toBe("FunctionSummary")
+			}
 		}
 	})
 

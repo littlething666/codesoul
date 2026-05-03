@@ -6,6 +6,8 @@ import {
 import type {
 	GraphQueryResult,
 	GraphStore,
+	ListEdgesOptions,
+	ListNodesOptions,
 	TraversalOptions,
 } from "./store.js"
 
@@ -91,7 +93,6 @@ export class MockGraphStore implements GraphStore {
 					}
 				}
 			}
-			// Apply the limit only AFTER the current layer is fully discovered.
 			const nonSeedCount = collectedNodes.size - (start ? 1 : 0)
 			if (nonSeedCount >= limit) break
 			currentLayer = nextLayer
@@ -108,6 +109,40 @@ export class MockGraphStore implements GraphStore {
 		return Array.from(this.nodes.values()).filter(
 			(n) => n.qualifiedName === name || n.qualifiedName.endsWith(`::${name}`),
 		)
+	}
+
+	async listNodes(options: ListNodesOptions = {}): Promise<GraphNode[]> {
+		const out: GraphNode[] = []
+		const limit =
+			options.limit && options.limit > 0
+				? options.limit
+				: Number.POSITIVE_INFINITY
+		for (const n of this.nodes.values()) {
+			if (options.kind && n.kind !== options.kind) continue
+			if (options.pathPrefix && !n.path.startsWith(options.pathPrefix))
+				continue
+			if (options.repoId && n.repoId !== options.repoId) continue
+			if (options.indexRunId && n.indexRunId !== options.indexRunId) continue
+			out.push(n)
+			if (out.length >= limit) break
+		}
+		return out
+	}
+
+	async listEdges(options: ListEdgesOptions = {}): Promise<GraphEdge[]> {
+		const out: GraphEdge[] = []
+		const limit =
+			options.limit && options.limit > 0
+				? options.limit
+				: Number.POSITIVE_INFINITY
+		for (const e of this.edges.values()) {
+			if (options.type && e.type !== options.type) continue
+			if (options.repoId && e.repoId !== options.repoId) continue
+			if (options.indexRunId && e.indexRunId !== options.indexRunId) continue
+			out.push(e)
+			if (out.length >= limit) break
+		}
+		return out
 	}
 
 	async health(): Promise<{ ok: boolean; details?: string }> {

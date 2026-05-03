@@ -1,52 +1,92 @@
-import type { Command } from "commander"
+import { InvalidArgumentError, type Command } from "commander"
+import type { EdgeType, NodeKind } from "@codesoul/core"
 import type { Phase0Deps } from "../wiring.js"
 
-export const registerInspect = (program: Command, _deps: Phase0Deps): void => {
+const parsePositiveInt = (value: string): number => {
+	const n = Number(value)
+	if (!Number.isInteger(n) || n <= 0) {
+		throw new InvalidArgumentError("must be a positive integer")
+	}
+	return n
+}
+
+type NodesOptions = {
+	kind?: string
+	path?: string
+	limit: number
+}
+
+type EdgesOptions = {
+	type?: string
+	limit: number
+}
+
+type VectorsOptions = {
+	limit: number
+	run?: string
+}
+
+export const registerInspect = (program: Command, deps: Phase0Deps): void => {
 	const inspect = program
 		.command("inspect")
-		.description("Inspect indexed data (Phase 0: mocks only)")
+		.description("Inspect indexed data (Phase 0/0.5: backed by mock stores)")
 
 	inspect
 		.command("nodes")
 		.description("List nodes in the graph")
 		.option("--kind <kind>", "filter by node kind")
-		.option("--path <glob>", "filter by path")
-		.action(async (_opts: { kind?: string; path?: string }) => {
-			console.log(
-				JSON.stringify(
-					{ note: "nodes inspection requires an indexed graph; phase 0 stub" },
-					null,
-					2,
-				),
-			)
+		.option("--path <prefix>", "filter by path prefix")
+		.option("--limit <n>", "limit results", parsePositiveInt, 50)
+		.action(async (opts: NodesOptions) => {
+			const nodes = await deps.graph.listNodes({
+				...(opts.kind ? { kind: opts.kind as NodeKind } : {}),
+				...(opts.path ? { pathPrefix: opts.path } : {}),
+				limit: opts.limit,
+			})
+			console.log(JSON.stringify(nodes, null, 2))
 		})
 
 	inspect
 		.command("edges")
 		.description("List edges in the graph")
 		.option("--type <type>", "filter by edge type")
-		.action(async () => {
-			console.log(
-				JSON.stringify(
-					{ note: "edges inspection requires an indexed graph; phase 0 stub" },
-					null,
-					2,
-				),
-			)
+		.option("--limit <n>", "limit results", parsePositiveInt, 50)
+		.action(async (opts: EdgesOptions) => {
+			const edges = await deps.graph.listEdges({
+				...(opts.type ? { type: opts.type as EdgeType } : {}),
+				limit: opts.limit,
+			})
+			console.log(JSON.stringify(edges, null, 2))
 		})
 
 	inspect
 		.command("vectors")
-		.description("List vectors")
-		.option("--limit <n>", "limit", "10")
-		.action(async () => {
-			console.log(
-				JSON.stringify(
-					{ note: "vectors inspection requires an indexed graph; phase 0 stub" },
-					null,
-					2,
-				),
-			)
+		.description("List vectors for an index run")
+		.option("--limit <n>", "limit results", parsePositiveInt, 10)
+		.option("--run <id>", "index run id to filter by")
+		.action(async (opts: VectorsOptions) => {
+			if (!opts.run) {
+				console.log(
+					JSON.stringify(
+						{
+							note: "pass --run <indexRunId> to list vectors for a specific run",
+						},
+						null,
+						2,
+					),
+				)
+				return
+			}
+			const rows = await deps.vectors.listByRun(opts.run, { limit: opts.limit })
+			const summary = rows.map((r) => ({
+				nodeId: r.nodeId,
+				payloadKind: r.payloadKind,
+				embeddingModel: r.embeddingModel,
+				embeddingRevision: r.embeddingRevision,
+				embeddingDim: r.embeddingDim,
+				sourcePath: r.sourcePath,
+			}))
+			console.log(JSON.stringify(summary, null, 2))
 		})
 
 	inspect
