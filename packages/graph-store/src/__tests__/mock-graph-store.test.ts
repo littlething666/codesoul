@@ -14,7 +14,12 @@ const meta = {
 	schemaVersion: 1 as const,
 }
 
-const node = (id: string, qname: string, path = "src/x.ts"): GraphNode => ({
+const node = (
+	id: string,
+	qname: string,
+	path = "src/x.ts",
+	overrides: Partial<GraphNode> = {},
+): GraphNode => ({
 	...meta,
 	id,
 	path,
@@ -23,6 +28,7 @@ const node = (id: string, qname: string, path = "src/x.ts"): GraphNode => ({
 	qualifiedName: qname,
 	signature: "",
 	evidence: { startLine: 1, endLine: 1 },
+	...overrides,
 })
 
 const edge = (src: string, dst: string): GraphEdge => ({
@@ -154,7 +160,6 @@ describe("MockGraphStore.neighbors", () => {
 
 	it("layer-complete: finishes the current layer before applying limit", async () => {
 		const { s, a, b, c } = await setup()
-		// Limit is 1, but layer 1 contains both b and c (equally close).
 		const r = await s.neighbors(a.id, {
 			depth: 1,
 			direction: "out",
@@ -163,5 +168,83 @@ describe("MockGraphStore.neighbors", () => {
 		const ids = new Set(r.nodes.map((n) => n.id))
 		expect(ids.has(b.id)).toBe(true)
 		expect(ids.has(c.id)).toBe(true)
+	})
+})
+
+describe("MockGraphStore.listNodes", () => {
+	it("returns all nodes by default", async () => {
+		const s = new MockGraphStore()
+		await s.upsertNodes([
+			node(SYM("a"), "a", "src/a.ts"),
+			node(SYM("b"), "b", "src/b.ts"),
+		])
+		expect((await s.listNodes()).length).toBe(2)
+	})
+
+	it("filters by kind", async () => {
+		const s = new MockGraphStore()
+		await s.upsertNodes([
+			node(SYM("a"), "a"),
+			node(SYM("b"), "b", "src/x.ts", { kind: "Class" }),
+		])
+		const classes = await s.listNodes({ kind: "Class" })
+		expect(classes.length).toBe(1)
+		expect(classes[0]?.kind).toBe("Class")
+	})
+
+	it("filters by path prefix", async () => {
+		const s = new MockGraphStore()
+		await s.upsertNodes([
+			node(SYM("a"), "a", "src/foo/x.ts"),
+			node(SYM("b"), "b", "src/bar/y.ts"),
+		])
+		const foo = await s.listNodes({ pathPrefix: "src/foo/" })
+		expect(foo.length).toBe(1)
+		expect(foo[0]?.path).toBe("src/foo/x.ts")
+	})
+
+	it("applies limit", async () => {
+		const s = new MockGraphStore()
+		await s.upsertNodes([
+			node(SYM("a"), "a"),
+			node(SYM("b"), "b"),
+			node(SYM("c"), "c"),
+		])
+		expect((await s.listNodes({ limit: 2 })).length).toBe(2)
+	})
+
+	it("filters by repoId and indexRunId", async () => {
+		const s = new MockGraphStore()
+		await s.upsertNodes([
+			node(SYM("a"), "a"),
+			node(SYM("b"), "b", "src/x.ts", { repoId: "other" }),
+		])
+		expect((await s.listNodes({ repoId: "r" })).length).toBe(1)
+		expect((await s.listNodes({ indexRunId: "run_t" })).length).toBe(2)
+	})
+})
+
+describe("MockGraphStore.listEdges", () => {
+	it("returns all edges by default", async () => {
+		const s = new MockGraphStore()
+		const a = node(SYM("a"), "a")
+		const b = node(SYM("b"), "b")
+		await s.upsertNodes([a, b])
+		await s.upsertEdges([edge(a.id, b.id)])
+		expect((await s.listEdges()).length).toBe(1)
+	})
+
+	it("filters by type", async () => {
+		const s = new MockGraphStore()
+		const a = node(SYM("a"), "a")
+		const b = node(SYM("b"), "b")
+		await s.upsertNodes([a, b])
+		await s.upsertEdges([
+			{ ...edge(a.id, b.id), type: "CALLS" },
+			{ ...edge(a.id, b.id), type: "IMPORTS" },
+		])
+		const calls = await s.listEdges({ type: "CALLS" })
+		expect(calls.length).toBe(1)
+		expect(calls[0]?.type).toBe("CALLS")
 	})
 })
