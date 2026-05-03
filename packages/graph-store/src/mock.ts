@@ -1,4 +1,8 @@
 import type { EdgeType, GraphEdge, GraphNode } from "@codesoul/core"
+import {
+	GraphEdge as GraphEdgeSchema,
+	GraphNode as GraphNodeSchema,
+} from "@codesoul/core"
 import type {
 	GraphQueryResult,
 	GraphStore,
@@ -10,11 +14,15 @@ export class MockGraphStore implements GraphStore {
 	private readonly edges = new Map<string, GraphEdge>()
 
 	async upsertNodes(nodes: ReadonlyArray<GraphNode>): Promise<void> {
-		for (const n of nodes) this.nodes.set(n.id, n)
+		for (const raw of nodes) {
+			const n = GraphNodeSchema.parse(raw)
+			this.nodes.set(n.id, n)
+		}
 	}
 
 	async upsertEdges(edges: ReadonlyArray<GraphEdge>): Promise<void> {
-		for (const e of edges) {
+		for (const raw of edges) {
+			const e = GraphEdgeSchema.parse(raw)
 			this.edges.set(`${e.src}|${e.type}|${e.dst}`, e)
 		}
 	}
@@ -23,6 +31,15 @@ export class MockGraphStore implements GraphStore {
 		return this.nodes.get(id) ?? null
 	}
 
+	/**
+	 * Layer-complete BFS traversal.
+	 *
+	 * Traversal order: BFS
+	 * Edge order:      insertion order (Map iteration)
+	 * Layer policy:    finish the current BFS layer before applying limit
+	 * Seed node:       always included
+	 * Limit:           applies to discovered non-seed nodes
+	 */
 	async neighbors(
 		id: string,
 		options: TraversalOptions,
@@ -33,42 +50,52 @@ export class MockGraphStore implements GraphStore {
 				? new Set(options.edgeTypes)
 				: null
 
-		const visited = new Set<string>([id])
-		const queue: Array<{ id: string; depth: number }> = [{ id, depth: 0 }]
+		const start = this.nodes.get(id)
 		const collectedNodes = new Map<string, GraphNode>()
 		const collectedEdges = new Map<string, GraphEdge>()
-
-		const start = this.nodes.get(id)
 		if (start) collectedNodes.set(start.id, start)
 
-		while (queue.length > 0) {
-			const head = queue.shift()
-			if (!head) break
-			if (head.depth >= options.depth) continue
-			for (const e of this.edges.values()) {
-				if (allowed && !allowed.has(e.type)) continue
-				let other: string | null = null
-				if ((direction === "out" || direction === "both") && e.src === head.id) {
-					other = e.dst
-				} else if (
-					(direction === "in" || direction === "both") &&
-					e.dst === head.id
-				) {
-					other = e.src
+		const limit =
+			options.limit && options.limit > 0
+				? options.limit
+				: Number.POSITIVE_INFINITY
+
+		const visited = new Set<string>([id])
+		let currentLayer: string[] = [id]
+		for (let depth = 0; depth < options.depth; depth++) {
+			const nextLayer: string[] = []
+			for (const nodeId of currentLayer) {
+				for (const e of this.edges.values()) {
+					if (allowed && !allowed.has(e.type)) continue
+					let other: string | null = null
+					if (
+						(direction === "out" || direction === "both") &&
+						e.src === nodeId
+					) {
+						other = e.dst
+					} else if (
+						(direction === "in" || direction === "both") &&
+						e.dst === nodeId
+					) {
+						other = e.src
+					}
+					if (other === null) continue
+					collectedEdges.set(`${e.src}|${e.type}|${e.dst}`, e)
+					const node = this.nodes.get(other)
+					if (node && !collectedNodes.has(node.id)) {
+						collectedNodes.set(node.id, node)
+					}
+					if (!visited.has(other)) {
+						visited.add(other)
+						nextLayer.push(other)
+					}
 				}
-				if (other === null) continue
-				collectedEdges.set(`${e.src}|${e.type}|${e.dst}`, e)
-				const node = this.nodes.get(other)
-				if (node && !collectedNodes.has(node.id)) {
-					collectedNodes.set(node.id, node)
-				}
-				if (!visited.has(other)) {
-					visited.add(other)
-					queue.push({ id: other, depth: head.depth + 1 })
-				}
-				if (options.limit && collectedNodes.size >= options.limit) break
 			}
-			if (options.limit && collectedNodes.size >= options.limit) break
+			// Apply the limit only AFTER the current layer is fully discovered.
+			const nonSeedCount = collectedNodes.size - (start ? 1 : 0)
+			if (nonSeedCount >= limit) break
+			currentLayer = nextLayer
+			if (currentLayer.length === 0) break
 		}
 
 		return {

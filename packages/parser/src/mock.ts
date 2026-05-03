@@ -1,7 +1,10 @@
 import type { GraphEdge, GraphNode, Language, NodeKind } from "@codesoul/core"
 import {
+	GraphEdge as GraphEdgeSchema,
+	GraphNode as GraphNodeSchema,
 	SCHEMA_VERSION,
 	contentId,
+	edgeContentHash,
 	normalizeBody,
 	normalizeSignature,
 	stableId,
@@ -22,16 +25,19 @@ type DeclPattern = {
 	kind: Extract<NodeKind, "Function" | "Class">
 }
 
+// Phase 0 contract: top-level (file-scope) functions and classes only.
+// No methods, no arrow functions, no class members, no imports.
+// Methods land in Phase 1 (tree-sitter), where they will be emitted as Method.
 const patternsFor = (language: Language): DeclPattern[] => {
 	if (language === "typescript" || language === "javascript") {
 		return [
 			{
 				regex:
-					/(?:^|\n)\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*(\([^)]*\))/g,
+					/(?:^|\n)(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*(\([^)]*\))/g,
 				kind: "Function",
 			},
 			{
-				regex: /(?:^|\n)\s*(?:export\s+)?class\s+([A-Za-z_$][\w$]*)/g,
+				regex: /(?:^|\n)(?:export\s+)?class\s+([A-Za-z_$][\w$]*)/g,
 				kind: "Class",
 			},
 		]
@@ -39,11 +45,11 @@ const patternsFor = (language: Language): DeclPattern[] => {
 	if (language === "python") {
 		return [
 			{
-				regex: /(?:^|\n)[\t ]*def\s+([A-Za-z_][\w]*)\s*(\([^)]*\))/g,
+				regex: /(?:^|\n)def\s+([A-Za-z_][\w]*)\s*(\([^)]*\))/g,
 				kind: "Function",
 			},
 			{
-				regex: /(?:^|\n)[\t ]*class\s+([A-Za-z_][\w]*)/g,
+				regex: /(?:^|\n)class\s+([A-Za-z_][\w]*)/g,
 				kind: "Class",
 			},
 		]
@@ -81,7 +87,7 @@ export class MockParser implements Parser {
 			normalizedSignature: normalizeSignature(""),
 			normalizedBody: normalizeBody(args.source),
 		})
-		const fileNode: GraphNode = {
+		const fileNode: GraphNode = GraphNodeSchema.parse({
 			id: fileNodeId,
 			contentHash: fileContentId,
 			repoId: args.repoId,
@@ -95,7 +101,7 @@ export class MockParser implements Parser {
 			qualifiedName: fileQName,
 			signature: "",
 			evidence: { startLine: 1, endLine: totalLines },
-		}
+		})
 		nodes.push(fileNode)
 
 		for (const { regex, kind } of patternsFor(args.language)) {
@@ -119,7 +125,7 @@ export class MockParser implements Parser {
 					normalizedSignature: normalizeSignature(`${name}${sig}`),
 					normalizedBody: normalizeBody(`${name}${sig}`),
 				})
-				nodes.push({
+				const node: GraphNode = GraphNodeSchema.parse({
 					id,
 					contentHash: cId,
 					repoId: args.repoId,
@@ -134,7 +140,13 @@ export class MockParser implements Parser {
 					signature: `${name}${sig}`,
 					evidence: { startLine, endLine: startLine },
 				})
-				edges.push({
+				nodes.push(node)
+				const edgeHash = edgeContentHash({
+					src: fileNodeId,
+					type: "CONTAINS",
+					dst: id,
+				})
+				const edge: GraphEdge = GraphEdgeSchema.parse({
 					src: fileNodeId,
 					dst: id,
 					type: "CONTAINS",
@@ -142,9 +154,10 @@ export class MockParser implements Parser {
 					indexRunId: args.indexRunId,
 					batchId: args.batchId,
 					sourcePath: args.path,
-					contentHash: cId,
+					contentHash: edgeHash,
 					schemaVersion: SCHEMA_VERSION,
 				})
+				edges.push(edge)
 			}
 		}
 
