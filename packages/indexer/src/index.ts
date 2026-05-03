@@ -1,6 +1,5 @@
 export * from "./build-batch.js"
 export * from "./idgen.js"
 export * from "./indexer.js"
-export * from "./manifest.js"
 export * from "./mock-fixture.js"
 export * from "./time.js"

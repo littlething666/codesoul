@@ -8,6 +8,8 @@ import type {
 	VectorRow,
 } from "@codesoul/core"
 import { BatchManifest as BatchManifestSchema } from "@codesoul/core"
+import type { ManifestStore } from "@codesoul/manifest-store"
+import { InMemoryManifestStore } from "@codesoul/manifest-store/memory"
 import { buildBatch, type BuildBatchFile } from "./build-batch.js"
 import { CryptoIdGen, type IdGen } from "./idgen.js"
 import type {
@@ -104,15 +106,37 @@ const sourceTreeContentHash = (
 export type FixtureIndexerDeps = IndexerDeps & {
 	clock?: Clock
 	idGen?: IdGen
+	/**
+	 * Durable manifest/WAL store. If omitted, a fresh in-memory
+	 * ManifestStore is created using the provided clock so that the
+	 * `recordBatch` event timestamps and the `transitionBatch`
+	 * `committedAt` stamp share a single time source.
+	 */
+	manifestStore?: ManifestStore
 }
 
+/**
+ * FixtureIndexer drives the Phase 0/0.5 mock pipeline end-to-end and
+ * persists every batch through `@codesoul/manifest-store`:
+ *
+ *   1. Parse + buildBatch (counts known)
+ *   2. recordBatch(pending) — durable, with the creation event row
+ *   3. Persist nodes / edges / vectors (skipped on dryRun)
+ *   4. transitionBatch -> committed (or dry_run)
+ *
+ * If step 3 throws, the batch is transitioned to `failed` and the error
+ * is rethrown so the WAL is never left ambiguous.
+ */
 export class FixtureIndexer implements Indexer {
 	private readonly clock: Clock
 	private readonly idGen: IdGen
+	private readonly manifestStore: ManifestStore
 
 	constructor(private readonly deps: FixtureIndexerDeps) {
 		this.clock = deps.clock ?? SystemClock
 		this.idGen = deps.idGen ?? CryptoIdGen
+		this.manifestStore =
+			deps.manifestStore ?? new InMemoryManifestStore({ clock: this.clock })
 	}
 
 	async indexRepository(
@@ -180,24 +204,23 @@ export class FixtureIndexer implements Indexer {
 			}
 		}
 
-		if (!input.dryRun) {
-			await this.deps.graph.upsertNodes(nodes)
-			await this.deps.graph.upsertEdges(edges)
-			await this.deps.vectors.upsert(allVectors)
-		}
-
-		const manifest: BatchManifest = BatchManifestSchema.parse({
+		// Phase 2 wiring: durable manifest/WAL.
+		// Record the batch in `pending` state with final counts BEFORE
+		// persisting to graph/vector stores. On any persistence failure,
+		// transition to `failed` and rethrow so the WAL is never left
+		// ambiguous.
+		const pending: BatchManifest = BatchManifestSchema.parse({
 			batchId,
 			indexRunId: input.indexRunId,
 			repoId: input.repoId,
 			sourcePath: input.repoPath,
 			sourceContentHash: sourceTreeContentHash(digests),
-			status: input.dryRun ? "dry_run" : "committed",
+			status: "pending",
 			nodeCount: nodes.length,
 			edgeCount: edges.length,
 			vectorCount: allVectors.length,
 			createdAt: startedAt,
-			committedAt: input.dryRun ? null : this.clock.nowIso(),
+			committedAt: null,
 			checksum: checksum([
 				String(nodes.length),
 				String(edges.length),
@@ -205,12 +228,35 @@ export class FixtureIndexer implements Indexer {
 			]),
 			schemaVersion: 1,
 		})
+		await this.manifestStore.recordBatch(pending)
 
-		return {
-			manifest,
-			nodeCount: nodes.length,
-			edgeCount: edges.length,
-			vectorCount: allVectors.length,
+		try {
+			if (!input.dryRun) {
+				await this.deps.graph.upsertNodes(nodes)
+				await this.deps.graph.upsertEdges(edges)
+				await this.deps.vectors.upsert(allVectors)
+			}
+			const finalManifest = await this.manifestStore.transitionBatch({
+				batchId,
+				toStatus: input.dryRun ? "dry_run" : "committed",
+			})
+			return {
+				manifest: finalManifest,
+				nodeCount: nodes.length,
+				edgeCount: edges.length,
+				vectorCount: allVectors.length,
+			}
+		} catch (err) {
+			try {
+				await this.manifestStore.transitionBatch({
+					batchId,
+					toStatus: "failed",
+					message: err instanceof Error ? err.message : String(err),
+				})
+			} catch {
+				// Best effort; preserve and rethrow the original error.
+			}
+			throw err
 		}
 	}
 }
