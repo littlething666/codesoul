@@ -23,6 +23,6 @@
   },
   "devDependencies": {
     "@types/node": "24.12.2",
-    "fast-check": "3.23.2"
+    "fast-check": "4.7.0"
   }
 }
