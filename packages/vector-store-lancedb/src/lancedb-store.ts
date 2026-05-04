@@ -57,11 +57,16 @@ const MANIFEST_FILE_NAME = "codesoul-manifest.json"
 // uses an in-memory Map keyed by (nodeId, payloadKind) for upsert; we
 // emulate the same semantics by deleting matching rows before adding new
 // ones.
+//
+// Read-side note: when LanceDB hands rows back via `toArray()`, the
+// `vector` column is an Apache Arrow `Vector`, not a plain `number[]`.
+// Arrow Vectors are iterable, so we widen the type here and coerce in
+// `fromInternal` rather than fighting the binding's runtime shape.
 
 type InternalRow = {
 	nodeId: string
 	payloadKind: string
-	vector: number[]
+	vector: number[] | ArrayLike<number> | Iterable<number>
 	embeddingModel: string
 	embeddingRevision: string
 	embeddingDim: number
@@ -88,11 +93,15 @@ const toInternal = (r: VectorRow): InternalRow => ({
 	schemaVersion: r.schemaVersion,
 })
 
+const toPlainVector = (
+	v: number[] | ArrayLike<number> | Iterable<number>,
+): number[] => (Array.isArray(v) ? v : Array.from(v as Iterable<number>))
+
 const fromInternal = (r: InternalRow): VectorRow =>
 	VectorRowSchema.parse({
 		nodeId: r.nodeId,
 		payloadKind: r.payloadKind,
-		vector: r.vector,
+		vector: toPlainVector(r.vector),
 		embeddingModel: r.embeddingModel,
 		embeddingRevision: r.embeddingRevision,
 		embeddingDim: r.embeddingDim,
