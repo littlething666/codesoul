@@ -5,10 +5,6 @@ on:
   push:
     branches: [main]
 
-concurrency:
-  group: ci-$ github.workflow -$ github.ref 
-  cancel-in-progress: true
-
 jobs:
   ci:
     name: build + typecheck + test
@@ -36,8 +32,9 @@ jobs:
       - name: Build
         run: pnpm -r build
 
-      # Run typecheck and tests independently, surfacing both sets of
-      # errors in a single CI run instead of bailing on the first failure.
+      # Run typecheck and tests independently so PRs see the full error
+      # context from both checks in a single CI run instead of bailing
+      # on the first failure.
       - name: Typecheck
         id: typecheck
         run: pnpm -r typecheck
@@ -51,6 +48,5 @@ jobs:
       - name: Fail if typecheck or tests failed
         if: steps.typecheck.outcome == 'failure' || steps.test.outcome == 'failure'
         run: |
-          echo "typecheck outcome: $ steps.typecheck.outcome "
-          echo "test outcome:      $ steps.test.outcome "
+          echo "Typecheck or unit tests failed; see the Typecheck and Unit tests step logs above for the full error context."
           exit 1
