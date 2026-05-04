@@ -3,6 +3,7 @@ import {
 	EmbedderMode,
 	FileSystemSourceProvider,
 	RerankerMode,
+	VectorStoreMode,
 } from "@codesoul/core"
 import { retrieve } from "@codesoul/retrieval"
 import type { Phase0Deps } from "../wiring.js"
@@ -13,6 +14,7 @@ type QueryOptions = {
 	repo?: string
 	embedder?: EmbedderMode
 	reranker?: RerankerMode
+	vectorStore?: VectorStoreMode
 }
 
 const parsePositiveInt = (value: string): number => {
@@ -39,6 +41,14 @@ const parseRerankerMode = (value: string): RerankerMode => {
 	return result.data
 }
 
+const parseVectorStoreMode = (value: string): VectorStoreMode => {
+	const result = VectorStoreMode.safeParse(value)
+	if (!result.success) {
+		throw new InvalidArgumentError("must be one of: memory, lancedb")
+	}
+	return result.data
+}
+
 export const registerQuery = (program: Command, deps: Phase0Deps): void => {
 	program
 		.command("query")
@@ -59,6 +69,11 @@ export const registerQuery = (program: Command, deps: Phase0Deps): void => {
 			"reranker backend (mock | http; http requires CODESOUL_RERANKER_URL/MODEL/REVISION)",
 			parseRerankerMode,
 		)
+		.option(
+			"--vector-store <mode>",
+			"vector store backend (memory | lancedb; lancedb requires CODESOUL_VECTOR_STORE_URI)",
+			parseVectorStoreMode,
+		)
 		.action(async (text: string, opts: QueryOptions) => {
 			const embedderChanged =
 				opts.embedder !== undefined &&
@@ -66,11 +81,16 @@ export const registerQuery = (program: Command, deps: Phase0Deps): void => {
 			const rerankerChanged =
 				opts.reranker !== undefined &&
 				opts.reranker !== deps.config.reranker
+			const vectorStoreChanged =
+				opts.vectorStore !== undefined &&
+				opts.vectorStore !== deps.config.vectorStore
 			const active =
-				embedderChanged || rerankerChanged
+				embedderChanged || rerankerChanged || vectorStoreChanged
 					? wirePhase0({
 							embedder: opts.embedder ?? deps.config.embedder,
 							reranker: opts.reranker ?? deps.config.reranker,
+							vectorStore:
+								opts.vectorStore ?? deps.config.vectorStore,
 						})
 					: deps
 			const sourceProvider = opts.repo

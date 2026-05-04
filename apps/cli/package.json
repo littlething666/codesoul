@@ -29,6 +29,7 @@
     "@codesoul/rig": "workspace:*",
     "@codesoul/summarizer": "workspace:*",
     "@codesoul/vector-store": "workspace:*",
+    "@codesoul/vector-store-lancedb": "workspace:*",
     "commander": "14.0.3",
     "pino": "10.3.1",
     "zod": "4.4.2"

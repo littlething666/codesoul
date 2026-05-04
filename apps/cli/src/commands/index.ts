@@ -4,6 +4,7 @@ import {
 	ParserMode,
 	RerankerMode,
 	RigExtractorKind,
+	VectorStoreMode,
 } from "@codesoul/core"
 import type { Phase0Deps } from "../wiring.js"
 import { wirePhase0 } from "../wiring.js"
@@ -16,6 +17,7 @@ type IndexOptions = {
 	rigExtractors?: RigExtractorKind[]
 	embedder?: EmbedderMode
 	reranker?: RerankerMode
+	vectorStore?: VectorStoreMode
 }
 
 const parseParserMode = (value: string): ParserMode => {
@@ -40,6 +42,14 @@ const parseRerankerMode = (value: string): RerankerMode => {
 	const result = RerankerMode.safeParse(value)
 	if (!result.success) {
 		throw new InvalidArgumentError("must be one of: mock, http")
+	}
+	return result.data
+}
+
+const parseVectorStoreMode = (value: string): VectorStoreMode => {
+	const result = VectorStoreMode.safeParse(value)
+	if (!result.success) {
+		throw new InvalidArgumentError("must be one of: memory, lancedb")
 	}
 	return result.data
 }
@@ -99,6 +109,11 @@ export const registerIndex = (program: Command, deps: Phase0Deps): void => {
 			"reranker backend (mock | http; http requires CODESOUL_RERANKER_URL/MODEL/REVISION)",
 			parseRerankerMode,
 		)
+		.option(
+			"--vector-store <mode>",
+			"vector store backend (memory | lancedb; lancedb requires CODESOUL_VECTOR_STORE_URI)",
+			parseVectorStoreMode,
+		)
 		.action(async (repoPath: string, opts: IndexOptions) => {
 			const parserChanged =
 				opts.parser !== undefined && opts.parser !== deps.config.parser
@@ -111,17 +126,23 @@ export const registerIndex = (program: Command, deps: Phase0Deps): void => {
 			const rerankerChanged =
 				opts.reranker !== undefined &&
 				opts.reranker !== deps.config.reranker
+			const vectorStoreChanged =
+				opts.vectorStore !== undefined &&
+				opts.vectorStore !== deps.config.vectorStore
 			const active =
 				parserChanged ||
 				rigChanged ||
 				embedderChanged ||
-				rerankerChanged
+				rerankerChanged ||
+				vectorStoreChanged
 					? wirePhase0({
 							parser: opts.parser ?? deps.config.parser,
 							rigExtractors:
 								opts.rigExtractors ?? deps.config.rigExtractors,
 							embedder: opts.embedder ?? deps.config.embedder,
 							reranker: opts.reranker ?? deps.config.reranker,
+							vectorStore:
+								opts.vectorStore ?? deps.config.vectorStore,
 						})
 					: deps
 
@@ -141,6 +162,7 @@ export const registerIndex = (program: Command, deps: Phase0Deps): void => {
 						rigExtractors: active.config.rigExtractors,
 						embedder: active.config.embedder,
 						reranker: active.config.reranker,
+						vectorStore: active.config.vectorStore,
 						nodes: result.nodeCount,
 						edges: result.edgeCount,
 						vectors: result.vectorCount,

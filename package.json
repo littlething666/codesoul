@@ -26,6 +26,7 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
+      "@lancedb/lancedb",
       "better-sqlite3",
       "tree-sitter",
       "tree-sitter-javascript",

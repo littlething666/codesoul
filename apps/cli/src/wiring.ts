@@ -37,7 +37,9 @@ import { PackageJsonRigExtractor } from "@codesoul/rig/package-json"
 import { PyProjectRigExtractor } from "@codesoul/rig/pyproject"
 import { SpadeCMakeRigExtractor } from "@codesoul/rig/spade-cmake"
 import { MockSummarizer } from "@codesoul/summarizer/mock"
+import type { VectorStore } from "@codesoul/vector-store"
 import { MockVectorStore } from "@codesoul/vector-store/mock"
+import { LanceDBVectorStore } from "@codesoul/vector-store-lancedb"
 import { FixtureIndexer } from "@codesoul/indexer"
 import type { Indexer } from "@codesoul/indexer"
 
@@ -45,7 +47,12 @@ export type Phase0Deps = {
 	parser: Parser
 	rig: RigExtractor
 	graph: MockGraphStore
-	vectors: MockVectorStore
+	/**
+	 * Vector store retyped to the VectorStore interface (Phase 6 wiring).
+	 * Selecting LanceDB at the IndexConfig layer means callers must talk to
+	 * the structural interface, not MockVectorStore-only methods.
+	 */
+	vectors: VectorStore
 	embedder: Embedder
 	reranker: Reranker
 	summarizer: MockSummarizer
@@ -108,6 +115,47 @@ const buildSourceProvider = (env: WirePhase0Env): SourceProvider => {
 	const repoPath = env.CODESOUL_REPO_PATH
 	if (repoPath) return new FileSystemSourceProvider(repoPath)
 	return new MockSourceProvider()
+}
+
+/**
+ * Phase 6 wiring: pick the VectorStore implementation from IndexConfig.
+ *
+ * - "memory" returns a fresh MockVectorStore (the default).
+ * - "lancedb" requires CODESOUL_VECTOR_STORE_URI and constructs a
+ *   LanceDBVectorStore. The adapter is lazy: it only opens a connection
+ *   on the first upsert/search/listByRun call, so constructing it here
+ *   does not require the @lancedb/lancedb native binding to be loadable
+ *   on every machine that imports this module.
+ *
+ * There is intentionally no "fall back to mock" knob (unlike the HTTP
+ * embedder/reranker). Vector identity is persisted, so silently swapping
+ * backends would let later searches read across incompatible tables.
+ */
+const buildVectorStore = (
+	mode: IndexConfig["vectorStore"],
+	env: WirePhase0Env,
+): VectorStore => {
+	switch (mode) {
+		case "memory":
+			return new MockVectorStore()
+		case "lancedb": {
+			const uri = env.CODESOUL_VECTOR_STORE_URI
+			if (!uri) {
+				throw new AdapterUnavailableError(
+					"vectorStore: 'lancedb' requires CODESOUL_VECTOR_STORE_URI",
+				)
+			}
+			const tableName = env.CODESOUL_VECTOR_STORE_TABLE
+			const manifestPath = env.CODESOUL_VECTOR_STORE_MANIFEST_PATH
+			const tokenizerVersion = env.CODESOUL_VECTOR_STORE_TOKENIZER_VERSION
+			return new LanceDBVectorStore({
+				uri,
+				...(tableName ? { tableName } : {}),
+				...(manifestPath ? { manifestPath } : {}),
+				...(tokenizerVersion ? { tokenizerVersion } : {}),
+			})
+		}
+	}
 }
 
 /**
@@ -240,7 +288,7 @@ export const wirePhase0 = (
 	const parser = buildParser(config.parser)
 	const rig = buildRig(config)
 	const graph = new MockGraphStore()
-	const vectors = new MockVectorStore()
+	const vectors = buildVectorStore(config.vectorStore, env)
 	const sourceProvider = buildSourceProvider(env)
 	const embedder = buildEmbedder(config.embedder, env, logger)
 	const reranker = buildReranker(
