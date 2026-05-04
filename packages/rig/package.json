@@ -11,6 +11,14 @@
     "./mock": {
       "types": "./dist/mock.d.ts",
       "import": "./dist/mock.js"
+    },
+    "./package-json": {
+      "types": "./dist/package-json.d.ts",
+      "import": "./dist/package-json.js"
+    },
+    "./pyproject": {
+      "types": "./dist/pyproject.d.ts",
+      "import": "./dist/pyproject.js"
     }
   },
   "main": "./dist/index.js",
@@ -23,6 +31,7 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
-    "@codesoul/core": "workspace:*"
+    "@codesoul/core": "workspace:*",
+    "smol-toml": "1.6.1"
   }
 }
