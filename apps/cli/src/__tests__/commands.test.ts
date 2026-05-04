@@ -33,7 +33,7 @@ const stubManifest = (input: {
 		committedAt: input.dryRun ? null : "2026-01-01T00:00:00.000Z",
 		checksum: "x",
 		schemaVersion: 1,
-	},
+	}),
 	nodeCount: 0,
 	edgeCount: 0,
 	vectorCount: 0,
@@ -161,9 +161,6 @@ describe("codesoul index", () => {
 		const program = buildProgram(deps).exitOverride()
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
 		const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
-		// The re-wired branch creates a fresh real FixtureIndexer that will
-		// try to read the sentinel path from disk and throw — we tolerate that
-		// failure and only assert that the injected stub indexer was bypassed.
 		try {
 			await program
 				.parseAsync(
@@ -261,6 +258,149 @@ describe("codesoul index", () => {
 				)
 				.catch(() => undefined)
 		} finally {
+			logSpy.mockRestore()
+			errSpy.mockRestore()
+		}
+		expect(invocations).toBe(0)
+	})
+
+	it("rejects unknown --embedder modes", async () => {
+		const deps = makeDeps()
+		const program = buildProgram(deps).exitOverride()
+		await expect(
+			program.parseAsync(
+				[
+					"index",
+					"./fixtures/tiny-ts-lib",
+					"--dry-run",
+					"--embedder",
+					"bogus",
+				],
+				{ from: "user" },
+			),
+		).rejects.toBeInstanceOf(Error)
+	})
+
+	it("rejects unknown --reranker modes", async () => {
+		const deps = makeDeps()
+		const program = buildProgram(deps).exitOverride()
+		await expect(
+			program.parseAsync(
+				[
+					"index",
+					"./fixtures/tiny-ts-lib",
+					"--dry-run",
+					"--reranker",
+					"bogus",
+				],
+				{ from: "user" },
+			),
+		).rejects.toBeInstanceOf(Error)
+	})
+
+	it("--embedder mock uses the injected deps.indexer (no re-wire)", async () => {
+		let invocations = 0
+		const base = wirePhase0()
+		const deps: Phase0Deps = {
+			...base,
+			indexer: {
+				async indexRepository(input) {
+					invocations++
+					return stubManifest(input)
+				},
+			},
+		}
+		const program = buildProgram(deps).exitOverride()
+		const spy = vi.spyOn(console, "log").mockImplementation(() => {})
+		try {
+			await program.parseAsync(
+				[
+					"index",
+					"./fixtures/tiny-ts-lib",
+					"--dry-run",
+					"--embedder",
+					"mock",
+				],
+				{ from: "user" },
+			)
+		} finally {
+			spy.mockRestore()
+		}
+		expect(invocations).toBe(1)
+	})
+
+	it("--reranker mock uses the injected deps.indexer (no re-wire)", async () => {
+		let invocations = 0
+		const base = wirePhase0()
+		const deps: Phase0Deps = {
+			...base,
+			indexer: {
+				async indexRepository(input) {
+					invocations++
+					return stubManifest(input)
+				},
+			},
+		}
+		const program = buildProgram(deps).exitOverride()
+		const spy = vi.spyOn(console, "log").mockImplementation(() => {})
+		try {
+			await program.parseAsync(
+				[
+					"index",
+					"./fixtures/tiny-ts-lib",
+					"--dry-run",
+					"--reranker",
+					"mock",
+				],
+				{ from: "user" },
+			)
+		} finally {
+			spy.mockRestore()
+		}
+		expect(invocations).toBe(1)
+	})
+
+	it("--embedder http triggers a re-wire (which then fails fast on missing env vars)", async () => {
+		let invocations = 0
+		const base = wirePhase0()
+		const deps: Phase0Deps = {
+			...base,
+			indexer: {
+				async indexRepository(input) {
+					invocations++
+					return stubManifest(input)
+				},
+			},
+		}
+		const program = buildProgram(deps).exitOverride()
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+		const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+		// Snapshot env so the test stays hermetic regardless of the dev box.
+		const snapshot = {
+			url: process.env.CODESOUL_EMBEDDER_URL,
+			model: process.env.CODESOUL_EMBEDDER_MODEL,
+			rev: process.env.CODESOUL_EMBEDDER_REVISION,
+		}
+		delete process.env.CODESOUL_EMBEDDER_URL
+		delete process.env.CODESOUL_EMBEDDER_MODEL
+		delete process.env.CODESOUL_EMBEDDER_REVISION
+		try {
+			await program
+				.parseAsync(
+					[
+						"index",
+						"./fixtures/tiny-ts-lib",
+						"--dry-run",
+						"--embedder",
+						"http",
+					],
+					{ from: "user" },
+				)
+				.catch(() => undefined)
+		} finally {
+			if (snapshot.url) process.env.CODESOUL_EMBEDDER_URL = snapshot.url
+			if (snapshot.model) process.env.CODESOUL_EMBEDDER_MODEL = snapshot.model
+			if (snapshot.rev) process.env.CODESOUL_EMBEDDER_REVISION = snapshot.rev
 			logSpy.mockRestore()
 			errSpy.mockRestore()
 		}
