@@ -59,8 +59,6 @@ describe("TreeSitterParser", () => {
 		expect(kinds).toContain("File:src/farewell.ts")
 		expect(kinds).toContain("Function:src/farewell.ts::farewell")
 		expect(kinds).toContain("Class:src/farewell.ts::Farewell")
-		// Phase 2A — methods ARE emitted (this is the headline difference
-		// vs MockParser).
 		expect(kinds).toContain("Method:src/farewell.ts::Farewell.message")
 	})
 
@@ -102,7 +100,6 @@ describe("TreeSitterParser", () => {
 		expect(kinds).toContain("Class:src/greet.py::Greeter")
 		expect(kinds).toContain("Method:src/greet.py::Greeter.__init__")
 		expect(kinds).toContain("Method:src/greet.py::Greeter.message")
-		// Methods must NOT also appear as top-level Functions.
 		expect(kinds).not.toContain("Function:src/greet.py::__init__")
 		expect(kinds).not.toContain("Function:src/greet.py::message")
 	})
@@ -122,7 +119,7 @@ describe("TreeSitterParser", () => {
 				n.kind === "Function" ||
 				n.kind === "Method",
 		)
-		expect(decls.length).toBeGreaterThanOrEqual(3) // a, B, B.m
+		expect(decls.length).toBeGreaterThanOrEqual(3)
 		for (const decl of decls) {
 			const edge = r.edges.find(
 				(e) =>
@@ -212,11 +209,9 @@ describe("TreeSitterParser imports (Phase 2B)", () => {
 			"src/index.ts::import:./greet.js",
 		)
 		expect(importNode?.signature).toBe("./greet.js")
-
 		const fileNode = r.nodes.find((n) => n.kind === "File")
 		expect(fileNode).toBeDefined()
 		if (!fileNode || !importNode) return
-
 		const importsEdge = r.edges.find(
 			(e) =>
 				e.src === fileNode.id &&
@@ -224,7 +219,6 @@ describe("TreeSitterParser imports (Phase 2B)", () => {
 				e.type === "IMPORTS",
 		)
 		expect(importsEdge).toBeDefined()
-
 		const containsEdge = r.edges.find(
 			(e) =>
 				e.src === fileNode.id &&
@@ -247,7 +241,7 @@ describe("TreeSitterParser imports (Phase 2B)", () => {
 		expect(importSpecs).toEqual(["./farewell.js", "./greet.js"])
 	})
 
-	it("resolves TS local relative imports to a File→File IMPORTS edge", async () => {
+	it("resolves TS local relative imports to a File->File IMPORTS edge", async () => {
 		const r = await parse(
 			"typescript",
 			"src/index.ts",
@@ -256,10 +250,6 @@ describe("TreeSitterParser imports (Phase 2B)", () => {
 		const fileNode = r.nodes.find((n) => n.kind === "File")
 		expect(fileNode).toBeDefined()
 		if (!fileNode) return
-
-		// Determinism: the resolved target file id must equal what `stableId`
-		// produces for `src/greet.ts` — i.e. what the parser will emit when
-		// it later parses that file.
 		const greetFileId = stableId({
 			repoId: "r",
 			relativePath: "src/greet.ts",
@@ -280,8 +270,6 @@ describe("TreeSitterParser imports (Phase 2B)", () => {
 				dst: greetFileId,
 			}),
 		)
-
-		// Sanity check: parsing the target file actually produces that id.
 		const greetParse = await parse("typescript", "src/greet.ts", "")
 		expect(greetParse.nodes[0]?.id).toBe(greetFileId)
 	})
@@ -311,7 +299,7 @@ describe("TreeSitterParser imports (Phase 2B)", () => {
 		).toBe(true)
 	})
 
-	it("does NOT emit a File→File edge for bare TS module specifiers", async () => {
+	it("does NOT emit a File->File edge for bare TS module specifiers", async () => {
 		const r = await parse(
 			"typescript",
 			"src/x.ts",
@@ -320,13 +308,12 @@ describe("TreeSitterParser imports (Phase 2B)", () => {
 		const importNode = r.nodes.find((n) => n.kind === "Import")
 		expect(importNode).toBeDefined()
 		if (!importNode) return
-		// Only one IMPORTS edge: File → Import. No resolved File→File edge.
 		const importsEdges = r.edges.filter((e) => e.type === "IMPORTS")
 		expect(importsEdges.length).toBe(1)
 		expect(importsEdges[0]?.dst).toBe(importNode.id)
 	})
 
-	it("does NOT emit a File→File edge for extensionless / directory specifiers", async () => {
+	it("does NOT emit a File->File edge for extensionless / directory specifiers", async () => {
 		const r = await parse(
 			"typescript",
 			"src/x.ts",
@@ -367,7 +354,7 @@ describe("TreeSitterParser imports (Phase 2B)", () => {
 		expect(importNodes[0]?.qualifiedName).toBe("src/x.py::import:foo")
 	})
 
-	it("does NOT emit File→File edges for any Python imports", async () => {
+	it("does NOT emit File->File edges for any Python imports", async () => {
 		const r = await parse(
 			"python",
 			"src/x.py",
@@ -376,8 +363,6 @@ describe("TreeSitterParser imports (Phase 2B)", () => {
 		const importNodes = r.nodes.filter((n) => n.kind === "Import")
 		const importNodeIds = new Set(importNodes.map((n) => n.id))
 		const importsEdges = r.edges.filter((e) => e.type === "IMPORTS")
-		// Every IMPORTS edge must terminate at one of the locally-emitted
-		// Import nodes; no File→File edges allowed for Python.
 		for (const e of importsEdges) {
 			expect(importNodeIds.has(e.dst)).toBe(true)
 		}
@@ -401,5 +386,212 @@ describe("TreeSitterParser imports (Phase 2B)", () => {
 		)
 		for (const n of r.nodes) GraphNodeSchema.parse(n)
 		for (const e of r.edges) GraphEdgeSchema.parse(e)
+	})
+})
+
+describe("TreeSitterParser intra-file CALLS (Phase 2C)", () => {
+	it("emits a CALLS edge between top-level TS functions calling each other", async () => {
+		const r = await parse(
+			"typescript",
+			"src/greet.ts",
+			`export function greet(name: string): string { return name }\nexport function greetMany(names: string[]): string[] { return names.map((n) => greet(n)) }\n`,
+		)
+		const greet = r.nodes.find(
+			(n) => n.qualifiedName === "src/greet.ts::greet",
+		)
+		const greetMany = r.nodes.find(
+			(n) => n.qualifiedName === "src/greet.ts::greetMany",
+		)
+		expect(greet).toBeDefined()
+		expect(greetMany).toBeDefined()
+		if (!greet || !greetMany) return
+		const callsEdge = r.edges.find(
+			(e) =>
+				e.src === greetMany.id &&
+				e.dst === greet.id &&
+				e.type === "CALLS",
+		)
+		expect(callsEdge).toBeDefined()
+		expect(callsEdge?.contentHash).toBe(
+			edgeContentHash({
+				src: greetMany.id,
+				type: "CALLS",
+				dst: greet.id,
+			}),
+		)
+	})
+
+	it("emits a CALLS edge from a TS method to a top-level function", async () => {
+		const r = await parse(
+			"typescript",
+			"src/farewell.ts",
+			`export function farewell(name: string): string { return name }\nexport class Farewell {\n\tmessage(): string { return farewell("x") }\n}\n`,
+		)
+		const farewell = r.nodes.find(
+			(n) => n.qualifiedName === "src/farewell.ts::farewell",
+		)
+		const method = r.nodes.find(
+			(n) => n.qualifiedName === "src/farewell.ts::Farewell.message",
+		)
+		expect(farewell).toBeDefined()
+		expect(method).toBeDefined()
+		if (!farewell || !method) return
+		expect(
+			r.edges.some(
+				(e) =>
+					e.src === method.id &&
+					e.dst === farewell.id &&
+					e.type === "CALLS",
+			),
+		).toBe(true)
+	})
+
+	it("emits a CALLS edge from a TS method to another method on the same class via this.foo", async () => {
+		const r = await parse(
+			"typescript",
+			"src/c.ts",
+			`export class C {\n\thelper(): string { return "x" }\n\tmain(): string { return this.helper() }\n}\n`,
+		)
+		const helper = r.nodes.find(
+			(n) => n.qualifiedName === "src/c.ts::C.helper",
+		)
+		const main = r.nodes.find(
+			(n) => n.qualifiedName === "src/c.ts::C.main",
+		)
+		expect(helper).toBeDefined()
+		expect(main).toBeDefined()
+		if (!helper || !main) return
+		expect(
+			r.edges.some(
+				(e) =>
+					e.src === main.id &&
+					e.dst === helper.id &&
+					e.type === "CALLS",
+			),
+		).toBe(true)
+	})
+
+	it("does NOT cross-contaminate same-named methods across classes", async () => {
+		const r = await parse(
+			"typescript",
+			"src/d.ts",
+			`export class A {\n\trun(): void {}\n\tcaller(): void { this.run() }\n}\nexport class B {\n\trun(): void {}\n}\n`,
+		)
+		const aRun = r.nodes.find(
+			(n) => n.qualifiedName === "src/d.ts::A.run",
+		)
+		const bRun = r.nodes.find(
+			(n) => n.qualifiedName === "src/d.ts::B.run",
+		)
+		const caller = r.nodes.find(
+			(n) => n.qualifiedName === "src/d.ts::A.caller",
+		)
+		expect(aRun && bRun && caller).toBeTruthy()
+		if (!aRun || !bRun || !caller) return
+		expect(
+			r.edges.some(
+				(e) =>
+					e.src === caller.id &&
+					e.dst === aRun.id &&
+					e.type === "CALLS",
+			),
+		).toBe(true)
+		expect(
+			r.edges.some(
+				(e) =>
+					e.src === caller.id &&
+					e.dst === bRun.id &&
+					e.type === "CALLS",
+			),
+		).toBe(false)
+	})
+
+	it("does NOT emit a CALLS edge for unresolved bare TS names (library calls)", async () => {
+		const r = await parse(
+			"typescript",
+			"src/x.ts",
+			`export function f() {\n\tconsole.log("x")\n\tArray.from([])\n}\n`,
+		)
+		const callsEdges = r.edges.filter((e) => e.type === "CALLS")
+		expect(callsEdges).toHaveLength(0)
+	})
+
+	it("does NOT emit a self-call CALLS edge for direct recursion", async () => {
+		const r = await parse(
+			"typescript",
+			"src/r.ts",
+			`export function f(n: number): number { return n <= 0 ? 0 : f(n - 1) + 1 }\n`,
+		)
+		const callsEdges = r.edges.filter((e) => e.type === "CALLS")
+		expect(callsEdges).toHaveLength(0)
+	})
+
+	it("dedupes multiple call sites between same caller and callee", async () => {
+		const r = await parse(
+			"typescript",
+			"src/m.ts",
+			`export function a() {}\nexport function b() { a(); a(); a() }\n`,
+		)
+		const callsEdges = r.edges.filter((e) => e.type === "CALLS")
+		expect(callsEdges).toHaveLength(1)
+	})
+
+	it("emits a CALLS edge between top-level Python functions", async () => {
+		const r = await parse(
+			"python",
+			"src/p.py",
+			`def helper():\n    return 1\n\ndef main():\n    return helper()\n`,
+		)
+		const helper = r.nodes.find(
+			(n) => n.qualifiedName === "src/p.py::helper",
+		)
+		const main = r.nodes.find(
+			(n) => n.qualifiedName === "src/p.py::main",
+		)
+		expect(helper && main).toBeTruthy()
+		if (!helper || !main) return
+		expect(
+			r.edges.some(
+				(e) =>
+					e.src === main.id &&
+					e.dst === helper.id &&
+					e.type === "CALLS",
+			),
+		).toBe(true)
+	})
+
+	it("emits a CALLS edge from a Python method to another method on the same class via self.foo", async () => {
+		const r = await parse(
+			"python",
+			"src/q.py",
+			`class C:\n    def helper(self):\n        return 1\n    def main(self):\n        return self.helper()\n`,
+		)
+		const helper = r.nodes.find(
+			(n) => n.qualifiedName === "src/q.py::C.helper",
+		)
+		const main = r.nodes.find(
+			(n) => n.qualifiedName === "src/q.py::C.main",
+		)
+		expect(helper && main).toBeTruthy()
+		if (!helper || !main) return
+		expect(
+			r.edges.some(
+				(e) =>
+					e.src === main.id &&
+					e.dst === helper.id &&
+					e.type === "CALLS",
+			),
+		).toBe(true)
+	})
+
+	it("validates CALLS edges against the GraphEdge schema", async () => {
+		const r = await parse(
+			"typescript",
+			"src/s.ts",
+			`export function a() {}\nexport function b() { a() }\n`,
+		)
+		for (const e of r.edges) GraphEdgeSchema.parse(e)
+		const callsEdges = r.edges.filter((e) => e.type === "CALLS")
+		expect(callsEdges.length).toBe(1)
 	})
 })
