@@ -315,6 +315,23 @@ describe("codesoul index", () => {
 		).rejects.toBeInstanceOf(Error)
 	})
 
+	it("rejects unknown --graph-store modes", async () => {
+		const deps = makeDeps()
+		const program = buildProgram(deps).exitOverride()
+		await expect(
+			program.parseAsync(
+				[
+					"index",
+					"./fixtures/tiny-ts-lib",
+					"--dry-run",
+					"--graph-store",
+					"bogus",
+				],
+				{ from: "user" },
+			),
+		).rejects.toBeInstanceOf(Error)
+	})
+
 	it("--embedder mock uses the injected deps.indexer (no re-wire)", async () => {
 		let invocations = 0
 		const base = wirePhase0()
@@ -408,6 +425,37 @@ describe("codesoul index", () => {
 		expect(invocations).toBe(1)
 	})
 
+	it("--graph-store memory uses the injected deps.indexer (no re-wire)", async () => {
+		let invocations = 0
+		const base = wirePhase0()
+		const deps: Phase0Deps = {
+			...base,
+			indexer: {
+				async indexRepository(input) {
+					invocations++
+					return stubManifest(input)
+				},
+			},
+		}
+		const program = buildProgram(deps).exitOverride()
+		const spy = vi.spyOn(console, "log").mockImplementation(() => {})
+		try {
+			await program.parseAsync(
+				[
+					"index",
+					"./fixtures/tiny-ts-lib",
+					"--dry-run",
+					"--graph-store",
+					"memory",
+				],
+				{ from: "user" },
+			)
+		} finally {
+			spy.mockRestore()
+		}
+		expect(invocations).toBe(1)
+	})
+
 	it("--embedder http triggers a re-wire (which then fails fast on missing env vars)", async () => {
 		let invocations = 0
 		const base = wirePhase0()
@@ -490,6 +538,53 @@ describe("codesoul index", () => {
 		} finally {
 			if (snapshot.uri)
 				process.env.CODESOUL_VECTOR_STORE_URI = snapshot.uri
+			logSpy.mockRestore()
+			errSpy.mockRestore()
+		}
+		expect(invocations).toBe(0)
+	})
+
+	it("--graph-store neo4j triggers a re-wire (which then fails fast on missing env vars)", async () => {
+		let invocations = 0
+		const base = wirePhase0()
+		const deps: Phase0Deps = {
+			...base,
+			indexer: {
+				async indexRepository(input) {
+					invocations++
+					return stubManifest(input)
+				},
+			},
+		}
+		const program = buildProgram(deps).exitOverride()
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+		const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+		const snapshot = {
+			url: process.env.CODESOUL_NEO4J_URL,
+			user: process.env.CODESOUL_NEO4J_USER,
+			password: process.env.CODESOUL_NEO4J_PASSWORD,
+		}
+		delete process.env.CODESOUL_NEO4J_URL
+		delete process.env.CODESOUL_NEO4J_USER
+		delete process.env.CODESOUL_NEO4J_PASSWORD
+		try {
+			await program
+				.parseAsync(
+					[
+						"index",
+						"./fixtures/tiny-ts-lib",
+						"--dry-run",
+						"--graph-store",
+						"neo4j",
+					],
+					{ from: "user" },
+				)
+				.catch(() => undefined)
+		} finally {
+			if (snapshot.url) process.env.CODESOUL_NEO4J_URL = snapshot.url
+			if (snapshot.user) process.env.CODESOUL_NEO4J_USER = snapshot.user
+			if (snapshot.password)
+				process.env.CODESOUL_NEO4J_PASSWORD = snapshot.password
 			logSpy.mockRestore()
 			errSpy.mockRestore()
 		}

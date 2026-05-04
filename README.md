@@ -54,6 +54,30 @@ fixtures/
 - Every package subpath is declared in `"exports"` (including `./mock`).
 - No `require`, no `__dirname`, no CJS shims.
 
+## Neo4j graph store (Phase 3)
+
+The `memory` (in-process `MockGraphStore`) backend stays the default for tests and dry-runs. To run against a real Neo4j 5.26-LTS instance:
+
+```bash
+# 1. Start Neo4j (docker-compose.yml ships a 5.26-community service)
+docker compose up -d --wait neo4j
+
+# 2. Point the CLI at it
+export CODESOUL_NEO4J_URL=bolt://localhost:7687
+export CODESOUL_NEO4J_USER=neo4j
+export CODESOUL_NEO4J_PASSWORD=password
+# Optional; defaults to "neo4j".
+export CODESOUL_NEO4J_DATABASE=neo4j
+
+# 3. Use --graph-store neo4j on either command
+pnpm --filter @codesoul/cli exec node dist/bin.js \
+  index ./fixtures/tiny-ts-lib --graph-store neo4j
+```
+
+Migrations (a unique constraint on `(:Symbol).id` plus BTREE indexes for the dimensions retrieval and inspection filter by) are applied **idempotently on first write**, so a brand-new database does not need an out-of-band bootstrap step before the first `index` run. Operators who prefer to migrate explicitly can call `Neo4jGraphStore.runMigrations()` directly; the second invocation from the lazy path is a no-op because every statement uses `IF NOT EXISTS`.
+
+Unlike the HTTP embedder/reranker, there is **no** `CODESOUL_NEO4J_FALLBACK=memory` knob: graph identity is persisted, so silently swapping backends would let later traversals read across incompatible stores. Missing env vars throw `AdapterUnavailableError` instead.
+
 ## HTTP embedder / reranker (Phase 5)
 
 The `mock` backend stays the default for tests and dry-runs. To run against the real model server:
