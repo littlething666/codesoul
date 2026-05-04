@@ -116,4 +116,21 @@ Identity is verified at the response boundary: a server replying with vectors fr
 
 When `CODESOUL_LOG_LATENCY` is on, the **outermost** adapter (after any `FallbackEmbedder` / `FallbackReranker`) is wrapped with `LatencyLoggingEmbedder` / `LatencyLoggingReranker`, so the recorded `durationMs` includes any fallback retry — i.e. it reflects the user-visible call duration, not just the primary's.
 
-Real Qwen3-Embedding / Qwen3-Reranker backends are gated behind the `[models]` extra in `workers/model-server/pyproject.toml` and will land in a follow-up.
+### Real Qwen3 backends
+
+The Python model server's `sentence-transformers` backend (gated behind the `[models]` extra in `workers/model-server/pyproject.toml`) loads `Qwen/Qwen3-Embedding-0.6B` (1024-dim) and `Qwen/Qwen3-Reranker-0.6B` via the CrossEncoder API. Per the planning doc's *Model revision pinning* guardrail, both backends require a concrete HF commit SHA — the placeholder `"0"` is rejected at construction time:
+
+```bash
+cd workers/model-server
+pip install -e .[models]
+
+export CODESOUL_MODEL_SERVER_EMBEDDER_BACKEND=sentence-transformers
+export CODESOUL_MODEL_SERVER_EMBEDDER_MODEL_ID=Qwen/Qwen3-Embedding-0.6B
+export CODESOUL_MODEL_SERVER_EMBEDDER_MODEL_REVISION=<hf-commit-sha>
+export CODESOUL_MODEL_SERVER_RERANKER_BACKEND=sentence-transformers
+export CODESOUL_MODEL_SERVER_RERANKER_MODEL_ID=Qwen/Qwen3-Reranker-0.6B
+export CODESOUL_MODEL_SERVER_RERANKER_MODEL_REVISION=<hf-commit-sha>
+codesoul-model-server
+```
+
+Set the matching identity on the TS side via `CODESOUL_EMBEDDER_MODEL` / `_REVISION` and `CODESOUL_RERANKER_MODEL` / `_REVISION`. See `workers/model-server/README.md` for the full env-var matrix and the opt-in real-load smoke test.

@@ -28,7 +28,7 @@ validation is the client's job; the TypeScript adapters throw
 | Backend | Embedder | Reranker | Use case |
 | --- | --- | --- | --- |
 | `stub` | SHA-256-based pseudo-vectors, deterministic | Jaccard similarity over whitespace tokens | CI, local dev without a GPU, contract tests |
-| `sentence-transformers` *(planned)* | Qwen3-Embedding-0.6B (1024-dim) | Qwen3-Reranker-0.6B via vLLM | Real workloads |
+| `sentence-transformers` | Qwen/Qwen3-Embedding-0.6B (1024-dim) | Qwen/Qwen3-Reranker-0.6B via the CrossEncoder API | Real workloads |
 
 Real backends are gated behind the `models` extra so `torch` is opt-in:
 
@@ -58,6 +58,51 @@ export CODESOUL_RERANKER_REVISION=0
 pnpm --filter @codesoul/cli exec node dist/bin.js query "greet" --repo ./fixtures/tiny-ts-lib
 ```
 
+## Real Qwen3 backends
+
+The `sentence-transformers` backend loads
+[Qwen/Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B)
+(1024-dim) and
+[Qwen/Qwen3-Reranker-0.6B](https://huggingface.co/Qwen/Qwen3-Reranker-0.6B)
+via `transformers==5.7.0` + `torch==2.11.0`. Per the planning doc's
+*Model revision pinning* guardrail, the HF revision must be a concrete
+commit SHA, not a branch or tag — the server refuses to start with the
+stub default `"0"`:
+
+```bash
+pip install -e .[models]
+
+export CODESOUL_MODEL_SERVER_EMBEDDER_BACKEND=sentence-transformers
+export CODESOUL_MODEL_SERVER_EMBEDDER_MODEL_ID=Qwen/Qwen3-Embedding-0.6B
+export CODESOUL_MODEL_SERVER_EMBEDDER_MODEL_REVISION=<hf-commit-sha>
+export CODESOUL_MODEL_SERVER_EMBEDDER_DIMENSION=1024
+
+export CODESOUL_MODEL_SERVER_RERANKER_BACKEND=sentence-transformers
+export CODESOUL_MODEL_SERVER_RERANKER_MODEL_ID=Qwen/Qwen3-Reranker-0.6B
+export CODESOUL_MODEL_SERVER_RERANKER_MODEL_REVISION=<hf-commit-sha>
+
+# Optional torch device hints (defaults to library auto-detect):
+export CODESOUL_MODEL_SERVER_EMBEDDER_DEVICE=cuda:0
+export CODESOUL_MODEL_SERVER_RERANKER_DEVICE=cuda:0
+
+codesoul-model-server
+```
+
+On the TS side, point `CODESOUL_EMBEDDER_MODEL` / `_REVISION` and
+`CODESOUL_RERANKER_MODEL` / `_REVISION` at the same identity strings
+the server reports — the adapter raises `EmbeddingCompatibilityError`
+on any mismatch instead of silently corrupting the index.
+
+Real-load smoke tests are gated behind `CODESOUL_MODELS_SMOKE=1` plus a
+concrete `CODESOUL_QWEN3_EMBEDDING_REVISION` so the multi-GB download
+is never accidental:
+
+```bash
+CODESOUL_MODELS_SMOKE=1 \
+CODESOUL_QWEN3_EMBEDDING_REVISION=<hf-commit-sha> \
+pytest tests/test_real_backends.py::test_sentence_transformers_embedder_smoke
+```
+
 ## Configuration
 
 All settings are read via `pydantic-settings` from `CODESOUL_MODEL_SERVER_*`
@@ -67,10 +112,12 @@ env vars (or a `.env` file in the working directory):
 | --- | --- | --- |
 | `CODESOUL_MODEL_SERVER_HOST` | `0.0.0.0` | uvicorn bind |
 | `CODESOUL_MODEL_SERVER_PORT` | `8000` | uvicorn port |
-| `CODESOUL_MODEL_SERVER_EMBEDDER_BACKEND` | `stub` | `stub` only for now |
+| `CODESOUL_MODEL_SERVER_EMBEDDER_BACKEND` | `stub` | `stub` \| `sentence-transformers` |
 | `CODESOUL_MODEL_SERVER_EMBEDDER_MODEL_ID` | `stub-embedder` | Echoed in responses |
-| `CODESOUL_MODEL_SERVER_EMBEDDER_MODEL_REVISION` | `0` | Echoed in responses |
-| `CODESOUL_MODEL_SERVER_EMBEDDER_DIMENSION` | `1024` | Must match `EMBEDDING_DIM` on the TS side |
-| `CODESOUL_MODEL_SERVER_RERANKER_BACKEND` | `stub` | `stub` only for now |
+| `CODESOUL_MODEL_SERVER_EMBEDDER_MODEL_REVISION` | `0` | HF commit SHA when backend is `sentence-transformers` (placeholder rejected) |
+| `CODESOUL_MODEL_SERVER_EMBEDDER_DIMENSION` | `1024` | Must match `EMBEDDING_DIM` on the TS side and the loaded model's actual dimension |
+| `CODESOUL_MODEL_SERVER_EMBEDDER_DEVICE` | _(unset)_ | Optional torch device hint, e.g. `cuda:0`, `mps`, `cpu` |
+| `CODESOUL_MODEL_SERVER_RERANKER_BACKEND` | `stub` | `stub` \| `sentence-transformers` |
 | `CODESOUL_MODEL_SERVER_RERANKER_MODEL_ID` | `stub-reranker` | Echoed in responses |
-| `CODESOUL_MODEL_SERVER_RERANKER_MODEL_REVISION` | `0` | Echoed in responses |
+| `CODESOUL_MODEL_SERVER_RERANKER_MODEL_REVISION` | `0` | HF commit SHA when backend is `sentence-transformers` (placeholder rejected) |
+| `CODESOUL_MODEL_SERVER_RERANKER_DEVICE` | _(unset)_ | Optional torch device hint |
