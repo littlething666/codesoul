@@ -26,6 +26,22 @@ export type Neo4jGraphStoreOptions = {
 	username: string
 	password: string
 	database?: string
+	/**
+	 * When true, every write (`upsertNodes` / `upsertEdges`) awaits an
+	 * idempotent `runMigrations()` call exactly once on first use.
+	 *
+	 * Defaults to false so callers that bootstrap explicitly (the
+	 * integration test, ops scripts) don't pay the round-trip twice.
+	 * Wiring code (`apps/cli/src/wiring.ts`) sets this to true so
+	 * `wirePhase0` can stay synchronous: a fresh CLI invocation against
+	 * a brand-new Neo4j database doesn't require an out-of-band
+	 * migration step before the first `index` run.
+	 *
+	 * Migrations are constraints / indexes only and every statement uses
+	 * `IF NOT EXISTS`, so calling `runMigrations()` twice (once explicitly,
+	 * once lazily) is safe and observable.
+	 */
+	autoMigrate?: boolean
 }
 
 type LayerRecord = {
@@ -70,6 +86,8 @@ type LayerRecord = {
 export class Neo4jGraphStore implements GraphStore {
 	private readonly driver: Driver
 	private readonly database: string
+	private readonly autoMigrateEnabled: boolean
+	private migrationPromise: Promise<void> | null = null
 
 	constructor(options: Neo4jGraphStoreOptions) {
 		this.driver = neo4j.driver(
@@ -78,6 +96,7 @@ export class Neo4jGraphStore implements GraphStore {
 			{ disableLosslessIntegers: true },
 		)
 		this.database = options.database ?? "neo4j"
+		this.autoMigrateEnabled = options.autoMigrate ?? false
 	}
 
 	private session(): Session {
@@ -100,8 +119,23 @@ export class Neo4jGraphStore implements GraphStore {
 		}
 	}
 
+	/**
+	 * If `autoMigrate` is on, run migrations exactly once on first write.
+	 * The promise is cached so concurrent writes share the same migration
+	 * round-trip instead of stampeding the database with N redundant
+	 * `CREATE CONSTRAINT IF NOT EXISTS` statements.
+	 */
+	private async ensureMigrated(): Promise<void> {
+		if (!this.autoMigrateEnabled) return
+		if (!this.migrationPromise) {
+			this.migrationPromise = this.runMigrations()
+		}
+		await this.migrationPromise
+	}
+
 	async upsertNodes(nodes: ReadonlyArray<GraphNode>): Promise<void> {
 		if (nodes.length === 0) return
+		await this.ensureMigrated()
 		const validated = nodes.map((n) => GraphNodeSchema.parse(n))
 		const params = validated.map(toNodeProps)
 		const session = this.session()
@@ -121,6 +155,7 @@ export class Neo4jGraphStore implements GraphStore {
 
 	async upsertEdges(edges: ReadonlyArray<GraphEdge>): Promise<void> {
 		if (edges.length === 0) return
+		await this.ensureMigrated()
 		const validated = edges.map((e) => GraphEdgeSchema.parse(e))
 		const byType = new Map<EdgeType, GraphEdge[]>()
 		for (const e of validated) {

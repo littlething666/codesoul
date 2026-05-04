@@ -16,7 +16,9 @@ import {
 	HttpEmbedder,
 	LatencyLoggingEmbedder,
 } from "@codesoul/embedder-http"
+import type { GraphStore } from "@codesoul/graph-store"
 import { MockGraphStore } from "@codesoul/graph-store/mock"
+import { Neo4jGraphStore } from "@codesoul/graph-store-neo4j"
 import type { ManifestStore } from "@codesoul/manifest-store"
 import { InMemoryManifestStore } from "@codesoul/manifest-store/memory"
 import type { Parser } from "@codesoul/parser"
@@ -46,7 +48,12 @@ import type { Indexer } from "@codesoul/indexer"
 export type Phase0Deps = {
 	parser: Parser
 	rig: RigExtractor
-	graph: MockGraphStore
+	/**
+	 * Graph store retyped to the GraphStore interface (Phase 3 wiring).
+	 * Selecting Neo4j at the IndexConfig layer means callers must talk
+	 * to the structural interface, not MockGraphStore-only methods.
+	 */
+	graph: GraphStore
 	/**
 	 * Vector store retyped to the VectorStore interface (Phase 6 wiring).
 	 * Selecting LanceDB at the IndexConfig layer means callers must talk to
@@ -115,6 +122,49 @@ const buildSourceProvider = (env: WirePhase0Env): SourceProvider => {
 	const repoPath = env.CODESOUL_REPO_PATH
 	if (repoPath) return new FileSystemSourceProvider(repoPath)
 	return new MockSourceProvider()
+}
+
+/**
+ * Phase 3 wiring: pick the GraphStore implementation from IndexConfig.
+ *
+ * - "memory" returns a fresh MockGraphStore (the default).
+ * - "neo4j" requires CODESOUL_NEO4J_URL / _USER / _PASSWORD and
+ *   constructs a Neo4jGraphStore with `autoMigrate: true`. The adapter
+ *   defers the actual driver session to the first call, and migrations
+ *   run idempotently on the first write — so constructing it here does
+ *   not hit the network and `wirePhase0` can stay synchronous.
+ *
+ * There is intentionally no "fall back to mock" knob (mirroring the
+ * LanceDB wiring, and unlike the HTTP embedder/reranker). Graph
+ * identity is persisted, so silently swapping backends would let later
+ * traversals read across incompatible stores.
+ */
+const buildGraphStore = (
+	mode: IndexConfig["graphStore"],
+	env: WirePhase0Env,
+): GraphStore => {
+	switch (mode) {
+		case "memory":
+			return new MockGraphStore()
+		case "neo4j": {
+			const uri = env.CODESOUL_NEO4J_URL
+			const username = env.CODESOUL_NEO4J_USER
+			const password = env.CODESOUL_NEO4J_PASSWORD
+			if (!uri || !username || !password) {
+				throw new AdapterUnavailableError(
+					"graphStore: 'neo4j' requires CODESOUL_NEO4J_URL, CODESOUL_NEO4J_USER, and CODESOUL_NEO4J_PASSWORD",
+				)
+			}
+			const database = env.CODESOUL_NEO4J_DATABASE
+			return new Neo4jGraphStore({
+				uri,
+				username,
+				password,
+				...(database ? { database } : {}),
+				autoMigrate: true,
+			})
+		}
+	}
 }
 
 /**
@@ -287,7 +337,7 @@ export const wirePhase0 = (
 	})
 	const parser = buildParser(config.parser)
 	const rig = buildRig(config)
-	const graph = new MockGraphStore()
+	const graph = buildGraphStore(config.graphStore, env)
 	const vectors = buildVectorStore(config.vectorStore, env)
 	const sourceProvider = buildSourceProvider(env)
 	const embedder = buildEmbedder(config.embedder, env, logger)

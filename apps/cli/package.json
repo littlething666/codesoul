@@ -20,6 +20,7 @@
     "@codesoul/embedder": "workspace:*",
     "@codesoul/embedder-http": "workspace:*",
     "@codesoul/graph-store": "workspace:*",
+    "@codesoul/graph-store-neo4j": "workspace:*",
     "@codesoul/indexer": "workspace:*",
     "@codesoul/manifest-store": "workspace:*",
     "@codesoul/parser": "workspace:*",
