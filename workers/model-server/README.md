@@ -103,16 +103,25 @@ CODESOUL_QWEN3_EMBEDDING_REVISION=<hf-commit-sha> \
 pytest tests/test_real_backends.py::test_sentence_transformers_embedder_smoke
 ```
 
-## Cross-language conformance test
+## Cross-language conformance tests
 
-[`packages/embedder-http/src/__tests__/conformance.test.ts`](../../packages/embedder-http/src/__tests__/conformance.test.ts)
-spawns this server (stub backends only) on a free 127.0.0.1 port and
-compares vectors from `HttpEmbedder` against `MockEmbedder`
-byte-for-byte. The suite is gated on Python being able to import
+Two TS suites spawn this server (stub backends only) on a free
+127.0.0.1 port and compare the wire contract end-to-end:
+
+- [`packages/embedder-http/src/__tests__/conformance.test.ts`](../../packages/embedder-http/src/__tests__/conformance.test.ts)
+  asserts `HttpEmbedder` vectors match `MockEmbedder` byte-for-byte
+  (both stubs implement the same SHA-256-driven pseudo-vector spec).
+- [`packages/reranker-http/src/__tests__/conformance.test.ts`](../../packages/reranker-http/src/__tests__/conformance.test.ts)
+  asserts `HttpReranker` scores match a JS-side reference
+  implementation of the Python `StubReranker.rerank` algorithm
+  (Jaccard similarity over lowercased whitespace tokens) byte-for-byte.
+
+Both suites are gated on Python being able to import
 `codesoul_model_server`, so `pnpm --filter @codesoul/embedder-http test`
-in a fresh checkout simply skips it; to actually run it, install the
-model server into a venv on `PATH` (or point `CODESOUL_PYTHON_BIN` at
-the venv interpreter) before invoking vitest:
+or `pnpm --filter @codesoul/reranker-http test` in a fresh checkout
+simply skips them. To actually run them, install the model server
+into a venv on `PATH` (or point `CODESOUL_PYTHON_BIN` at the venv
+interpreter) before invoking vitest:
 
 ```bash
 cd workers/model-server
@@ -121,6 +130,7 @@ pip install -e .[dev]
 export CODESOUL_PYTHON_BIN="$(pwd)/.venv/bin/python"
 cd ../..
 pnpm --filter @codesoul/embedder-http test
+pnpm --filter @codesoul/reranker-http test
 ```
 
 A byte-for-byte mismatch means the algorithmic spec drifted on one
