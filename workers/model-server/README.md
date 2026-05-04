@@ -103,6 +103,29 @@ CODESOUL_QWEN3_EMBEDDING_REVISION=<hf-commit-sha> \
 pytest tests/test_real_backends.py::test_sentence_transformers_embedder_smoke
 ```
 
+## Cross-language conformance test
+
+[`packages/embedder-http/src/__tests__/conformance.test.ts`](../../packages/embedder-http/src/__tests__/conformance.test.ts)
+spawns this server (stub backends only) on a free 127.0.0.1 port and
+compares vectors from `HttpEmbedder` against `MockEmbedder`
+byte-for-byte. The suite is gated on Python being able to import
+`codesoul_model_server`, so `pnpm --filter @codesoul/embedder-http test`
+in a fresh checkout simply skips it; to actually run it, install the
+model server into a venv on `PATH` (or point `CODESOUL_PYTHON_BIN` at
+the venv interpreter) before invoking vitest:
+
+```bash
+cd workers/model-server
+python -m venv .venv && source .venv/bin/activate
+pip install -e .[dev]
+export CODESOUL_PYTHON_BIN="$(pwd)/.venv/bin/python"
+cd ../..
+pnpm --filter @codesoul/embedder-http test
+```
+
+A byte-for-byte mismatch means the algorithmic spec drifted on one
+side; treat it as a contract-breaking regression.
+
 ## Configuration
 
 All settings are read via `pydantic-settings` from `CODESOUL_MODEL_SERVER_*`
