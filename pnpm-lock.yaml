@@ -97,6 +97,18 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/embedder-http:
+    dependencies:
+      '@codesoul/core':
+        specifier: workspace:*
+        version: link:../core
+      '@codesoul/embedder':
+        specifier: workspace:*
+        version: link:../embedder
+      zod:
+        specifier: 4.4.2
+        version: 4.4.2
+
   packages/graph-store:
     dependencies:
       '@codesoul/core':
