@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process"
 import { stat } from "node:fs/promises"
 import { join } from "node:path"
+import { execa } from "execa"
 import { z } from "zod"
 import {
 	RigComponent,
@@ -52,11 +52,17 @@ export type SpadeRunResult = {
 }
 
 /**
- * Subprocess seam. The default implementation uses
- * `node:child_process.spawn`; tests inject a stub so the suite never
- * depends on a real SPADE binary being on PATH. A future PR can swap
- * this for `execa@9.6.1` (already pinned in the planning doc) without
- * touching call sites.
+ * Subprocess seam. The default implementation uses `execa@9.6.1`
+ * (pinned in the planning doc); tests inject a stub so the suite never
+ * depends on a real SPADE binary being on PATH.
+ *
+ * Behavior contract preserved across the spawn -> execa swap:
+ *
+ *   - timeout       -> throws `spade subprocess timed out after Nms`
+ *   - spawn error   -> throws the underlying Error (ENOENT etc.)
+ *   - non-zero exit -> resolves with { stdout, stderr, exitCode } and
+ *                      lets `SpadeCMakeRigExtractor.extract()` raise
+ *                      `RigExtractionError`.
  */
 export type SpadeRunner = (args: SpadeRunArgs) => Promise<SpadeRunResult>
 
@@ -65,53 +71,44 @@ export type SpadeCMakeRigExtractorOptions = {
 	binary?: string
 	/** Arguments passed to the binary. Defaults to `["--rig-export", "--format", "json"]`. */
 	args?: ReadonlyArray<string>
-	/** Hard timeout in ms; the child is SIGKILL'd on expiry. Default 60s. */
+	/** Hard timeout in ms; the child is killed on expiry. Default 60s. */
 	timeoutMs?: number
 	/** Test seam for the subprocess runner. */
 	run?: SpadeRunner
 }
 
-const defaultRunner: SpadeRunner = (args) =>
-	new Promise<SpadeRunResult>((resolve, reject) => {
-		const child = spawn(args.binary, [...args.args], {
-			cwd: args.cwd,
-			stdio: ["ignore", "pipe", "pipe"],
-		})
-		const stdoutChunks: Buffer[] = []
-		const stderrChunks: Buffer[] = []
-		let timedOut = false
-		let settled = false
-		const timer = setTimeout(() => {
-			timedOut = true
-			child.kill("SIGKILL")
-		}, args.timeoutMs)
-		child.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(chunk))
-		child.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(chunk))
-		child.once("error", (err) => {
-			if (settled) return
-			settled = true
-			clearTimeout(timer)
-			reject(err)
-		})
-		child.once("close", (code) => {
-			if (settled) return
-			settled = true
-			clearTimeout(timer)
-			if (timedOut) {
-				reject(
-					new Error(
-						`spade subprocess timed out after ${args.timeoutMs}ms`,
-					),
-				)
-				return
-			}
-			resolve({
-				stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-				stderr: Buffer.concat(stderrChunks).toString("utf8"),
-				exitCode: code ?? -1,
-			})
-		})
+const defaultRunner: SpadeRunner = async (args) => {
+	// `reject: false` lets us inspect the result on non-zero exit without
+	// a try/catch around the happy path. `timeout` makes execa kill the
+	// child and set `timedOut: true`. Spawn-level failures (ENOENT, etc.)
+	// surface as `failed: true` with `exitCode === undefined` and a
+	// populated `cause`.
+	const result = await execa(args.binary, [...args.args], {
+		cwd: args.cwd,
+		timeout: args.timeoutMs,
+		reject: false,
 	})
+	if (result.timedOut) {
+		throw new Error(
+			`spade subprocess timed out after ${args.timeoutMs}ms`,
+		)
+	}
+	if (
+		result.failed &&
+		(result.exitCode === undefined || result.exitCode === null)
+	) {
+		const cause = result.cause
+		if (cause instanceof Error) throw cause
+		throw new Error(
+			result.shortMessage ?? "spade subprocess failed to spawn",
+		)
+	}
+	return {
+		stdout: typeof result.stdout === "string" ? result.stdout : "",
+		stderr: typeof result.stderr === "string" ? result.stderr : "",
+		exitCode: result.exitCode ?? -1,
+	}
+}
 
 /**
  * Phase 7d RIG extractor for CMake projects, driven by the SPADE
