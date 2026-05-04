@@ -8,6 +8,7 @@ export default defineConfig({
 		"src/pyproject.ts",
 		"src/manual-yaml.ts",
 		"src/dispatcher.ts",
+		"src/spade-cmake.ts",
 	],
 	format: ["esm"],
 	target: "node22",

@@ -2,6 +2,7 @@ import {
 	IndexConfig,
 	MockSourceProvider,
 	defaultIndexConfig,
+	type RigExtractorKind,
 	type SourceProvider,
 } from "@codesoul/core"
 import { MockEmbedder } from "@codesoul/embedder/mock"
@@ -12,7 +13,13 @@ import type { Parser } from "@codesoul/parser"
 import { MockParser } from "@codesoul/parser/mock"
 import { TreeSitterParser } from "@codesoul/parser/tree-sitter"
 import { MockReranker } from "@codesoul/reranker/mock"
+import type { RigExtractor } from "@codesoul/rig"
+import { RigDispatcher } from "@codesoul/rig/dispatcher"
+import { ManualYamlRigExtractor } from "@codesoul/rig/manual-yaml"
 import { MockRigExtractor } from "@codesoul/rig/mock"
+import { PackageJsonRigExtractor } from "@codesoul/rig/package-json"
+import { PyProjectRigExtractor } from "@codesoul/rig/pyproject"
+import { SpadeCMakeRigExtractor } from "@codesoul/rig/spade-cmake"
 import { MockSummarizer } from "@codesoul/summarizer/mock"
 import { MockVectorStore } from "@codesoul/vector-store/mock"
 import { FixtureIndexer } from "@codesoul/indexer"
@@ -20,7 +27,7 @@ import type { Indexer } from "@codesoul/indexer"
 
 export type Phase0Deps = {
 	parser: Parser
-	rig: MockRigExtractor
+	rig: RigExtractor
 	graph: MockGraphStore
 	vectors: MockVectorStore
 	embedder: MockEmbedder
@@ -41,6 +48,30 @@ const buildParser = (mode: IndexConfig["parser"]): Parser => {
 	}
 }
 
+const buildRigExtractor = (kind: RigExtractorKind): RigExtractor => {
+	switch (kind) {
+		case "package-json":
+			return new PackageJsonRigExtractor()
+		case "pyproject":
+			return new PyProjectRigExtractor()
+		case "manual":
+			return new ManualYamlRigExtractor()
+		case "spade":
+			return new SpadeCMakeRigExtractor()
+	}
+}
+
+const buildRig = (config: IndexConfig): RigExtractor => {
+	if (config.rigExtractors.length === 0) {
+		// Preserve legacy behavior: with no explicit extractors configured,
+		// the wiring stays on the deterministic mock so existing tests and
+		// dry-run smokes don't depend on filesystem layout.
+		return new MockRigExtractor()
+	}
+	const extractors = config.rigExtractors.map(buildRigExtractor)
+	return new RigDispatcher(extractors)
+}
+
 export const wirePhase0 = (
 	configOverrides: Partial<IndexConfig> = {},
 ): Phase0Deps => {
@@ -49,7 +80,7 @@ export const wirePhase0 = (
 		...configOverrides,
 	})
 	const parser = buildParser(config.parser)
-	const rig = new MockRigExtractor()
+	const rig = buildRig(config)
 	const graph = new MockGraphStore()
 	const vectors = new MockVectorStore()
 	const embedder = new MockEmbedder()

@@ -27,6 +27,10 @@
     "./dispatcher": {
       "types": "./dist/dispatcher.d.ts",
       "import": "./dist/dispatcher.js"
+    },
+    "./spade-cmake": {
+      "types": "./dist/spade-cmake.d.ts",
+      "import": "./dist/spade-cmake.js"
     }
   },
   "main": "./dist/index.js",
