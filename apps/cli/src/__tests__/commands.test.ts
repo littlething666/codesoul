@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import type { IndexRepositoryResult } from "@codesoul/indexer"
 import { MockParser } from "@codesoul/parser/mock"
 import { TreeSitterParser } from "@codesoul/parser/tree-sitter"
 import type { Phase0Deps } from "../wiring.js"
@@ -15,7 +16,7 @@ const stubManifest = (input: {
 	indexRunId: string
 	repoPath: string
 	dryRun?: boolean
-}) => ({
+}): IndexRepositoryResult => ({
 	manifest: {
 		batchId: "batch_t",
 		indexRunId: input.indexRunId,
