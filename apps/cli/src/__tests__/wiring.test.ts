@@ -16,6 +16,8 @@ import {
 	HttpReranker,
 	LatencyLoggingReranker,
 } from "@codesoul/reranker-http"
+import { MockVectorStore } from "@codesoul/vector-store/mock"
+import { LanceDBVectorStore } from "@codesoul/vector-store-lancedb"
 import { wirePhase0 } from "../wiring.js"
 
 const MODEL_E = "Qwen/Qwen3-Embedding-0.6B"
@@ -171,6 +173,55 @@ describe("wirePhase0 (http modes)", () => {
 		const deps = wirePhase0({})
 		expect(deps.embedder).toBeInstanceOf(MockEmbedder)
 		expect(deps.reranker).toBeInstanceOf(MockReranker)
+	})
+})
+
+describe("wirePhase0 (vector store, Phase 6)", () => {
+	it("defaults to MockVectorStore when vectorStore mode is 'memory'", () => {
+		const deps = wirePhase0({}, { env: {}, logger: silentLogger })
+		expect(deps.config.vectorStore).toBe("memory")
+		expect(deps.vectors).toBeInstanceOf(MockVectorStore)
+	})
+
+	it("throws AdapterUnavailableError when vectorStore='lancedb' but CODESOUL_VECTOR_STORE_URI is missing", () => {
+		expect(() =>
+			wirePhase0(
+				{ vectorStore: "lancedb" },
+				{ env: {}, logger: silentLogger },
+			),
+		).toThrow(AdapterUnavailableError)
+	})
+
+	it("constructs LanceDBVectorStore when CODESOUL_VECTOR_STORE_URI is set", () => {
+		const deps = wirePhase0(
+			{ vectorStore: "lancedb" },
+			{
+				env: { CODESOUL_VECTOR_STORE_URI: "/tmp/codesoul-vectors" },
+				logger: silentLogger,
+			},
+		)
+		// Construction is lazy: the underlying lancedb connection is not
+		// opened until the first upsert/search/listByRun, so this assertion
+		// does not require the @lancedb/lancedb native binding.
+		expect(deps.vectors).toBeInstanceOf(LanceDBVectorStore)
+		expect(deps.config.vectorStore).toBe("lancedb")
+	})
+
+	it("forwards optional CODESOUL_VECTOR_STORE_TABLE / MANIFEST_PATH / TOKENIZER_VERSION", () => {
+		const deps = wirePhase0(
+			{ vectorStore: "lancedb" },
+			{
+				env: {
+					CODESOUL_VECTOR_STORE_URI: "/tmp/codesoul-vectors",
+					CODESOUL_VECTOR_STORE_TABLE: "custom_vectors",
+					CODESOUL_VECTOR_STORE_MANIFEST_PATH:
+						"/tmp/codesoul-manifest.json",
+					CODESOUL_VECTOR_STORE_TOKENIZER_VERSION: "qwen3-tok-1",
+				},
+				logger: silentLogger,
+			},
+		)
+		expect(deps.vectors).toBeInstanceOf(LanceDBVectorStore)
 	})
 })
 
