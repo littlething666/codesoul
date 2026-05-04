@@ -2,6 +2,7 @@ import { InvalidArgumentError, type Command } from "commander"
 import {
 	EmbedderMode,
 	FileSystemSourceProvider,
+	GraphStoreMode,
 	RerankerMode,
 	VectorStoreMode,
 } from "@codesoul/core"
@@ -15,6 +16,7 @@ type QueryOptions = {
 	embedder?: EmbedderMode
 	reranker?: RerankerMode
 	vectorStore?: VectorStoreMode
+	graphStore?: GraphStoreMode
 }
 
 const parsePositiveInt = (value: string): number => {
@@ -49,6 +51,14 @@ const parseVectorStoreMode = (value: string): VectorStoreMode => {
 	return result.data
 }
 
+const parseGraphStoreMode = (value: string): GraphStoreMode => {
+	const result = GraphStoreMode.safeParse(value)
+	if (!result.success) {
+		throw new InvalidArgumentError("must be one of: memory, neo4j")
+	}
+	return result.data
+}
+
 export const registerQuery = (program: Command, deps: Phase0Deps): void => {
 	program
 		.command("query")
@@ -74,6 +84,11 @@ export const registerQuery = (program: Command, deps: Phase0Deps): void => {
 			"vector store backend (memory | lancedb; lancedb requires CODESOUL_VECTOR_STORE_URI)",
 			parseVectorStoreMode,
 		)
+		.option(
+			"--graph-store <mode>",
+			"graph store backend (memory | neo4j; neo4j requires CODESOUL_NEO4J_URL/USER/PASSWORD)",
+			parseGraphStoreMode,
+		)
 		.action(async (text: string, opts: QueryOptions) => {
 			const embedderChanged =
 				opts.embedder !== undefined &&
@@ -84,13 +99,21 @@ export const registerQuery = (program: Command, deps: Phase0Deps): void => {
 			const vectorStoreChanged =
 				opts.vectorStore !== undefined &&
 				opts.vectorStore !== deps.config.vectorStore
+			const graphStoreChanged =
+				opts.graphStore !== undefined &&
+				opts.graphStore !== deps.config.graphStore
 			const active =
-				embedderChanged || rerankerChanged || vectorStoreChanged
+				embedderChanged ||
+				rerankerChanged ||
+				vectorStoreChanged ||
+				graphStoreChanged
 					? wirePhase0({
 							embedder: opts.embedder ?? deps.config.embedder,
 							reranker: opts.reranker ?? deps.config.reranker,
 							vectorStore:
 								opts.vectorStore ?? deps.config.vectorStore,
+							graphStore:
+								opts.graphStore ?? deps.config.graphStore,
 						})
 					: deps
 			const sourceProvider = opts.repo

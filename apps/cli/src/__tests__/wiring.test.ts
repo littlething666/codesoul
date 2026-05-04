@@ -10,6 +10,8 @@ import {
 	HttpEmbedder,
 	LatencyLoggingEmbedder,
 } from "@codesoul/embedder-http"
+import { MockGraphStore } from "@codesoul/graph-store/mock"
+import { Neo4jGraphStore } from "@codesoul/graph-store-neo4j"
 import { MockReranker } from "@codesoul/reranker/mock"
 import {
 	FallbackReranker,
@@ -173,6 +175,73 @@ describe("wirePhase0 (http modes)", () => {
 		const deps = wirePhase0({})
 		expect(deps.embedder).toBeInstanceOf(MockEmbedder)
 		expect(deps.reranker).toBeInstanceOf(MockReranker)
+	})
+})
+
+describe("wirePhase0 (graph store, Phase 3)", () => {
+	it("defaults to MockGraphStore when graphStore mode is 'memory'", () => {
+		const deps = wirePhase0({}, { env: {}, logger: silentLogger })
+		expect(deps.config.graphStore).toBe("memory")
+		expect(deps.graph).toBeInstanceOf(MockGraphStore)
+	})
+
+	it("throws AdapterUnavailableError when graphStore='neo4j' but env vars are missing", () => {
+		expect(() =>
+			wirePhase0(
+				{ graphStore: "neo4j" },
+				{ env: {}, logger: silentLogger },
+			),
+		).toThrow(AdapterUnavailableError)
+	})
+
+	it("throws AdapterUnavailableError when only some neo4j env vars are set", () => {
+		expect(() =>
+			wirePhase0(
+				{ graphStore: "neo4j" },
+				{
+					env: {
+						CODESOUL_NEO4J_URL: "bolt://localhost:7687",
+						CODESOUL_NEO4J_USER: "neo4j",
+						// password missing
+					},
+					logger: silentLogger,
+				},
+			),
+		).toThrow(AdapterUnavailableError)
+	})
+
+	it("constructs Neo4jGraphStore when all neo4j env vars are set", () => {
+		const deps = wirePhase0(
+			{ graphStore: "neo4j" },
+			{
+				env: {
+					CODESOUL_NEO4J_URL: "bolt://localhost:7687",
+					CODESOUL_NEO4J_USER: "neo4j",
+					CODESOUL_NEO4J_PASSWORD: "password",
+				},
+				logger: silentLogger,
+			},
+		)
+		// Construction is lazy: the driver session opens only on first call,
+		// so this assertion does not require Neo4j to be reachable.
+		expect(deps.graph).toBeInstanceOf(Neo4jGraphStore)
+		expect(deps.config.graphStore).toBe("neo4j")
+	})
+
+	it("forwards optional CODESOUL_NEO4J_DATABASE", () => {
+		const deps = wirePhase0(
+			{ graphStore: "neo4j" },
+			{
+				env: {
+					CODESOUL_NEO4J_URL: "bolt://localhost:7687",
+					CODESOUL_NEO4J_USER: "neo4j",
+					CODESOUL_NEO4J_PASSWORD: "password",
+					CODESOUL_NEO4J_DATABASE: "custom",
+				},
+				logger: silentLogger,
+			},
+		)
+		expect(deps.graph).toBeInstanceOf(Neo4jGraphStore)
 	})
 })
 

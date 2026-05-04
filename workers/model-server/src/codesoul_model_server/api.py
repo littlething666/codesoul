@@ -10,8 +10,16 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from .config import Settings
-from .embedder import Embedder, StubEmbedder
-from .reranker import Reranker, StubReranker
+from .embedder import (
+    Embedder,
+    SentenceTransformersEmbedder,
+    StubEmbedder,
+)
+from .reranker import (
+    Reranker,
+    SentenceTransformersReranker,
+    StubReranker,
+)
 from .schemas import (
     EmbeddingItem,
     EmbedRequest,
@@ -31,6 +39,13 @@ def _build_embedder(settings: Settings) -> Embedder:
             model_revision=settings.embedder_model_revision,
             dimension=settings.embedder_dimension,
         )
+    if settings.embedder_backend == "sentence-transformers":
+        return SentenceTransformersEmbedder(
+            model_id=settings.embedder_model_id,
+            model_revision=settings.embedder_model_revision,
+            dimension=settings.embedder_dimension,
+            device=settings.embedder_device,
+        )
     raise NotImplementedError(
         f"unknown embedder backend: {settings.embedder_backend}"
     )
@@ -41,6 +56,12 @@ def _build_reranker(settings: Settings) -> Reranker:
         return StubReranker(
             model_id=settings.reranker_model_id,
             model_revision=settings.reranker_model_revision,
+        )
+    if settings.reranker_backend == "sentence-transformers":
+        return SentenceTransformersReranker(
+            model_id=settings.reranker_model_id,
+            model_revision=settings.reranker_model_revision,
+            device=settings.reranker_device,
         )
     raise NotImplementedError(
         f"unknown reranker backend: {settings.reranker_backend}"

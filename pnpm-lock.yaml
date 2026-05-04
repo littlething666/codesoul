@@ -47,6 +47,9 @@ importers:
       '@codesoul/graph-store':
         specifier: workspace:*
         version: link:../../packages/graph-store
+      '@codesoul/graph-store-neo4j':
+        specifier: workspace:*
+        version: link:../../packages/graph-store-neo4j
       '@codesoul/indexer':
         specifier: workspace:*
         version: link:../../packages/indexer

@@ -1,6 +1,7 @@
 import { InvalidArgumentError, type Command } from "commander"
 import {
 	EmbedderMode,
+	GraphStoreMode,
 	ParserMode,
 	RerankerMode,
 	RigExtractorKind,
@@ -18,6 +19,7 @@ type IndexOptions = {
 	embedder?: EmbedderMode
 	reranker?: RerankerMode
 	vectorStore?: VectorStoreMode
+	graphStore?: GraphStoreMode
 }
 
 const parseParserMode = (value: string): ParserMode => {
@@ -50,6 +52,14 @@ const parseVectorStoreMode = (value: string): VectorStoreMode => {
 	const result = VectorStoreMode.safeParse(value)
 	if (!result.success) {
 		throw new InvalidArgumentError("must be one of: memory, lancedb")
+	}
+	return result.data
+}
+
+const parseGraphStoreMode = (value: string): GraphStoreMode => {
+	const result = GraphStoreMode.safeParse(value)
+	if (!result.success) {
+		throw new InvalidArgumentError("must be one of: memory, neo4j")
 	}
 	return result.data
 }
@@ -114,6 +124,11 @@ export const registerIndex = (program: Command, deps: Phase0Deps): void => {
 			"vector store backend (memory | lancedb; lancedb requires CODESOUL_VECTOR_STORE_URI)",
 			parseVectorStoreMode,
 		)
+		.option(
+			"--graph-store <mode>",
+			"graph store backend (memory | neo4j; neo4j requires CODESOUL_NEO4J_URL/USER/PASSWORD)",
+			parseGraphStoreMode,
+		)
 		.action(async (repoPath: string, opts: IndexOptions) => {
 			const parserChanged =
 				opts.parser !== undefined && opts.parser !== deps.config.parser
@@ -129,12 +144,16 @@ export const registerIndex = (program: Command, deps: Phase0Deps): void => {
 			const vectorStoreChanged =
 				opts.vectorStore !== undefined &&
 				opts.vectorStore !== deps.config.vectorStore
+			const graphStoreChanged =
+				opts.graphStore !== undefined &&
+				opts.graphStore !== deps.config.graphStore
 			const active =
 				parserChanged ||
 				rigChanged ||
 				embedderChanged ||
 				rerankerChanged ||
-				vectorStoreChanged
+				vectorStoreChanged ||
+				graphStoreChanged
 					? wirePhase0({
 							parser: opts.parser ?? deps.config.parser,
 							rigExtractors:
@@ -143,6 +162,8 @@ export const registerIndex = (program: Command, deps: Phase0Deps): void => {
 							reranker: opts.reranker ?? deps.config.reranker,
 							vectorStore:
 								opts.vectorStore ?? deps.config.vectorStore,
+							graphStore:
+								opts.graphStore ?? deps.config.graphStore,
 						})
 					: deps
 
@@ -163,6 +184,7 @@ export const registerIndex = (program: Command, deps: Phase0Deps): void => {
 						embedder: active.config.embedder,
 						reranker: active.config.reranker,
 						vectorStore: active.config.vectorStore,
+						graphStore: active.config.graphStore,
 						nodes: result.nodeCount,
 						edges: result.edgeCount,
 						vectors: result.vectorCount,
