@@ -1,0 +1,58 @@
+name: integration-neo4j
+
+on:
+  pull_request:
+    paths:
+      - "packages/graph-store-neo4j/**"
+      - ".github/workflows/integration-neo4j.yml"
+      - "docker-compose.yml"
+      - "pnpm-lock.yaml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      neo4j:
+        image: neo4j:5.26-community
+        env:
+          NEO4J_AUTH: neo4j/password
+          NEO4J_server_memory_heap_initial__size: 1G
+          NEO4J_server_memory_heap_max__size: 2G
+          NEO4J_server_memory_pagecache_size: 1G
+        ports:
+          - 7687:7687
+          - 7474:7474
+        options: >-
+          --health-cmd "wget -q --spider http://localhost:7474 || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 18
+          --health-start-period 30s
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace
+        run: pnpm -r build
+
+      - name: Run Neo4j integration tests
+        env:
+          NEO4J_INTEGRATION_URL: bolt://localhost:7687
+          NEO4J_INTEGRATION_USER: neo4j
+          NEO4J_INTEGRATION_PASSWORD: password
+          NEO4J_INTEGRATION_DATABASE: neo4j
+        run: pnpm --filter @codesoul/graph-store-neo4j test

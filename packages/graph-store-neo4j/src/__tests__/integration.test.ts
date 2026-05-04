@@ -6,11 +6,15 @@ import { Neo4jGraphStore } from "../neo4j-store.js"
 // Without it, the suite skips silently so `pnpm -r test` stays green on
 // dev machines and PR CI without Neo4j wired in. To run these locally:
 //
-//   docker compose up -d neo4j
+//   docker compose up -d --wait neo4j
 //   NEO4J_INTEGRATION_URL=bolt://localhost:7687 \
 //   NEO4J_INTEGRATION_USER=neo4j \
 //   NEO4J_INTEGRATION_PASSWORD=password \
 //   pnpm --filter @codesoul/graph-store-neo4j test
+//
+// Or use the convenience script:
+//
+//   ./scripts/test-neo4j-integration.sh
 
 const NEO4J_URL = process.env.NEO4J_INTEGRATION_URL
 const NEO4J_USER = process.env.NEO4J_INTEGRATION_USER ?? "neo4j"
@@ -19,7 +23,10 @@ const NEO4J_DB = process.env.NEO4J_INTEGRATION_DATABASE ?? "neo4j"
 
 const describeIntegration = NEO4J_URL ? describe : describe.skip
 
-const SYM = (c: string) => `sym_${c.repeat(40)}`
+// `GraphNode.id` is `sym_<40 hex chars>`. Build ids from a numeric index so
+// every test gets a unique, schema-valid id without having to hand-pick hex
+// characters per case.
+const SYM = (i: number) => `sym_${i.toString(16).padStart(40, "0")}`
 const CNT = (c: string) => `cnt_${c.repeat(40)}`
 
 // Each test run uses a unique repoId so concurrent / repeated runs do
@@ -78,20 +85,20 @@ describeIntegration("Neo4jGraphStore (integration)", () => {
 	})
 
 	it("upserts and retrieves a node", async () => {
-		const a = node(SYM("a"), "src/x.ts::greet")
+		const a = node(SYM(1), "src/x.ts::greet")
 		await store.upsertNodes([a])
 		expect(await store.getNode(a.id)).toEqual(a)
 	})
 
 	it("is idempotent on duplicate node upserts", async () => {
-		const a = node(SYM("a"), "src/x.ts::greet")
+		const a = node(SYM(2), "src/x.ts::greet2")
 		await store.upsertNodes([a, a])
 		expect(await store.getNode(a.id)).toEqual(a)
 	})
 
 	it("upserts and traverses out-edges", async () => {
-		const a = node(SYM("b"), "a")
-		const b = node(SYM("c"), "b")
+		const a = node(SYM(3), "a")
+		const b = node(SYM(4), "b")
 		await store.upsertNodes([a, b])
 		await store.upsertEdges([edge(a.id, b.id)])
 		const result = await store.neighbors(a.id, {
@@ -105,8 +112,8 @@ describeIntegration("Neo4jGraphStore (integration)", () => {
 	})
 
 	it("in direction returns parents", async () => {
-		const a = node(SYM("d"), "d")
-		const b = node(SYM("e"), "e")
+		const a = node(SYM(5), "d")
+		const b = node(SYM(6), "e")
 		await store.upsertNodes([a, b])
 		await store.upsertEdges([edge(a.id, b.id)])
 		const result = await store.neighbors(b.id, {
@@ -118,8 +125,8 @@ describeIntegration("Neo4jGraphStore (integration)", () => {
 	})
 
 	it("edgeTypes filters traversal", async () => {
-		const a = node(SYM("f"), "f")
-		const b = node(SYM("g"), "g")
+		const a = node(SYM(7), "f")
+		const b = node(SYM(8), "g")
 		await store.upsertNodes([a, b])
 		await store.upsertEdges([{ ...edge(a.id, b.id), type: "IMPORTS" }])
 		const calls = await store.neighbors(a.id, {
@@ -136,7 +143,7 @@ describeIntegration("Neo4jGraphStore (integration)", () => {
 	})
 
 	it("findByQualifiedName supports exact and suffix match", async () => {
-		const a = node(SYM("h"), "src/greet.ts::greet")
+		const a = node(SYM(9), "src/greet.ts::greet")
 		await store.upsertNodes([a])
 		const exact = await store.findByQualifiedName("src/greet.ts::greet")
 		expect(exact.some((n) => n.id === a.id)).toBe(true)
@@ -145,8 +152,8 @@ describeIntegration("Neo4jGraphStore (integration)", () => {
 	})
 
 	it("listNodes filters by kind, path prefix, and repoId", async () => {
-		const a = node(SYM("i"), "i", "src/foo/x.ts")
-		const b = node(SYM("j"), "j", "src/bar/y.ts", { kind: "Class" })
+		const a = node(SYM(10), "i", "src/foo/x.ts")
+		const b = node(SYM(11), "j", "src/bar/y.ts", { kind: "Class" })
 		await store.upsertNodes([a, b])
 		const foo = await store.listNodes({
 			pathPrefix: "src/foo/",
@@ -163,8 +170,8 @@ describeIntegration("Neo4jGraphStore (integration)", () => {
 	})
 
 	it("listEdges filters by type and repoId", async () => {
-		const a = node(SYM("k"), "k")
-		const b = node(SYM("l"), "l")
+		const a = node(SYM(12), "k")
+		const b = node(SYM(13), "l")
 		await store.upsertNodes([a, b])
 		await store.upsertEdges([{ ...edge(a.id, b.id), type: "IMPORTS" }])
 		const imports = await store.listEdges({
