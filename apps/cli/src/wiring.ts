@@ -1,4 +1,9 @@
-import { IndexConfig, defaultIndexConfig } from "@codesoul/core"
+import {
+	IndexConfig,
+	MockSourceProvider,
+	defaultIndexConfig,
+	type SourceProvider,
+} from "@codesoul/core"
 import { MockEmbedder } from "@codesoul/embedder/mock"
 import { MockGraphStore } from "@codesoul/graph-store/mock"
 import type { ManifestStore } from "@codesoul/manifest-store"
@@ -23,6 +28,7 @@ export type Phase0Deps = {
 	summarizer: MockSummarizer
 	manifestStore: ManifestStore
 	indexer: Indexer
+	sourceProvider: SourceProvider
 	config: IndexConfig
 }
 
@@ -50,6 +56,7 @@ export const wirePhase0 = (
 	const reranker = new MockReranker()
 	const summarizer = new MockSummarizer()
 	const manifestStore = new InMemoryManifestStore()
+	const sourceProvider: SourceProvider = new MockSourceProvider()
 	const indexer = new FixtureIndexer({
 		parser,
 		rig,
@@ -68,6 +75,7 @@ export const wirePhase0 = (
 		summarizer,
 		manifestStore,
 		indexer,
+		sourceProvider,
 		config,
 	}
 }
