@@ -72,13 +72,137 @@ const SUPPORTED: ReadonlyArray<Language> = [
 	"python",
 ]
 
-const collectTypescript = (root: SyntaxNode, source: string): Decl[] => {
+// ---- Call extraction (Phase 2C) --------------------------------------------
+//
+// Naive intra-file CALLS are collected during the same tree walk that finds
+// decls. For every Function/Method we recursively scan the body subtree
+// (including nested arrow/lambda/expression bodies) for call sites:
+//
+//   - TS/JS `call_expression` with `function` = `identifier`         → bare
+//   - TS/JS `call_expression` with `function` = `member_expression`
+//                                where `object` is the literal `this` keyword
+//                                                                  → thisOrSelf
+//   - Python `call` with `function` = `identifier`                   → bare
+//   - Python `call` with `function` = `attribute`
+//                                where `object` is the identifier `self`
+//                                                                  → thisOrSelf
+//
+// Other shapes (`super.foo`, `obj.foo`, `f[0]()`, `(g)()`, ...) are
+// intentionally ignored — naive mode never invents a target it cannot
+// resolve from the in-file decl table.
+
+type CallResolution = "bare" | "thisOrSelf"
+
+type CallerCtx = {
+	callerName: string
+	callerKind: "Function" | "Method"
+	callerClassName?: string
+}
+
+type CallSite = CallerCtx & {
+	calleeName: string
+	resolution: CallResolution
+}
+
+type CollectResult = {
+	decls: Decl[]
+	calls: CallSite[]
+}
+
+const withClass = (caller: CallerCtx, className: string | undefined): CallerCtx =>
+	className !== undefined ? { ...caller, callerClassName: className } : caller
+
+const collectCallsInTsBody = (
+	bodyNode: SyntaxNode,
+	caller: CallerCtx,
+): CallSite[] => {
+	const out: CallSite[] = []
+	const visit = (node: SyntaxNode): void => {
+		if (node.type === "call_expression") {
+			const fnNode = node.childForFieldName("function")
+			if (fnNode) {
+				if (fnNode.type === "identifier") {
+					out.push({
+						...caller,
+						calleeName: fnNode.text,
+						resolution: "bare",
+					})
+				} else if (fnNode.type === "member_expression") {
+					const obj = fnNode.childForFieldName("object")
+					const prop = fnNode.childForFieldName("property")
+					if (obj && obj.type === "this" && prop) {
+						out.push({
+							...caller,
+							calleeName: prop.text,
+							resolution: "thisOrSelf",
+						})
+					}
+				}
+			}
+		}
+		for (let i = 0; i < node.namedChildCount; i++) {
+			const child = node.namedChild(i)
+			if (child) visit(child)
+		}
+	}
+	visit(bodyNode)
+	return out
+}
+
+const collectCallsInPyBody = (
+	bodyNode: SyntaxNode,
+	caller: CallerCtx,
+): CallSite[] => {
+	const out: CallSite[] = []
+	const visit = (node: SyntaxNode): void => {
+		if (node.type === "call") {
+			const fnNode = node.childForFieldName("function")
+			if (fnNode) {
+				if (fnNode.type === "identifier") {
+					out.push({
+						...caller,
+						calleeName: fnNode.text,
+						resolution: "bare",
+					})
+				} else if (fnNode.type === "attribute") {
+					const obj = fnNode.childForFieldName("object")
+					const attr = fnNode.childForFieldName("attribute")
+					if (
+						obj &&
+						obj.type === "identifier" &&
+						obj.text === "self" &&
+						attr
+					) {
+						out.push({
+							...caller,
+							calleeName: attr.text,
+							resolution: "thisOrSelf",
+						})
+					}
+				}
+			}
+		}
+		for (let i = 0; i < node.namedChildCount; i++) {
+			const child = node.namedChild(i)
+			if (child) visit(child)
+		}
+	}
+	visit(bodyNode)
+	return out
+}
+
+const collectTypescript = (
+	root: SyntaxNode,
+	source: string,
+): CollectResult => {
 	const decls: Decl[] = []
+	const calls: CallSite[] = []
 	const visit = (node: SyntaxNode, parentClassName: string | null): void => {
 		const t = node.type
 		if (t === "function_declaration") {
 			const nameNode = node.childForFieldName("name")
 			const paramsNode = node.childForFieldName("parameters")
+			const bodyNode = node.childForFieldName("body")
 			if (nameNode) {
 				const name = nameNode.text
 				const signature = `${name}${paramsNode?.text ?? "()"}`
@@ -90,9 +214,17 @@ const collectTypescript = (root: SyntaxNode, source: string): Decl[] => {
 					startLine: node.startPosition.row + 1,
 					endLine: node.endPosition.row + 1,
 				})
+				if (bodyNode) {
+					calls.push(
+						...collectCallsInTsBody(bodyNode, {
+							callerName: name,
+							callerKind: "Function",
+						}),
+					)
+				}
 			}
-			// Phase 2A: do not descend into function bodies. Nested
-			// declarations land in later splits.
+			// Phase 2A: do not descend into function bodies for further
+			// decl extraction. Nested decls land in later splits.
 			return
 		}
 		if (t === "class_declaration") {
@@ -120,6 +252,7 @@ const collectTypescript = (root: SyntaxNode, source: string): Decl[] => {
 		if (t === "method_definition" && parentClassName) {
 			const nameNode = node.childForFieldName("name")
 			const paramsNode = node.childForFieldName("parameters")
+			const bodyNode = node.childForFieldName("body")
 			if (nameNode) {
 				const name = nameNode.text
 				const signature = `${name}${paramsNode?.text ?? "()"}`
@@ -132,6 +265,17 @@ const collectTypescript = (root: SyntaxNode, source: string): Decl[] => {
 					endLine: node.endPosition.row + 1,
 					parentClassName,
 				})
+				if (bodyNode) {
+					calls.push(
+						...collectCallsInTsBody(
+							bodyNode,
+							withClass(
+								{ callerName: name, callerKind: "Method" },
+								parentClassName,
+							),
+						),
+					)
+				}
 			}
 			return
 		}
@@ -143,16 +287,21 @@ const collectTypescript = (root: SyntaxNode, source: string): Decl[] => {
 		}
 	}
 	visit(root, null)
-	return decls
+	return { decls, calls }
 }
 
-const collectPython = (root: SyntaxNode, source: string): Decl[] => {
+const collectPython = (
+	root: SyntaxNode,
+	source: string,
+): CollectResult => {
 	const decls: Decl[] = []
+	const calls: CallSite[] = []
 	const visit = (node: SyntaxNode, parentClassName: string | null): void => {
 		const t = node.type
 		if (t === "function_definition") {
 			const nameNode = node.childForFieldName("name")
 			const paramsNode = node.childForFieldName("parameters")
+			const bodyNode = node.childForFieldName("body")
 			if (nameNode) {
 				const name = nameNode.text
 				const signature = `${name}${paramsNode?.text ?? "()"}`
@@ -175,6 +324,16 @@ const collectPython = (root: SyntaxNode, source: string): Decl[] => {
 							endLine: node.endPosition.row + 1,
 						}
 				decls.push(decl)
+				if (bodyNode) {
+					const caller: CallerCtx = parentClassName
+						? {
+								callerName: name,
+								callerKind: "Method",
+								callerClassName: parentClassName,
+							}
+						: { callerName: name, callerKind: "Function" }
+					calls.push(...collectCallsInPyBody(bodyNode, caller))
+				}
 			}
 			return
 		}
@@ -207,7 +366,7 @@ const collectPython = (root: SyntaxNode, source: string): Decl[] => {
 		}
 	}
 	visit(root, null)
-	return decls
+	return { decls, calls }
 }
 
 const qualifiedNameFor = (path: string, decl: Decl): string => {
@@ -240,9 +399,9 @@ const stripStringLiteral = (text: string): string => {
 }
 
 /**
- * TS/JS imports always live at the program (top) level in well-formed
- * source, so a shallow scan over the program's named children is correct
- * and noticeably cheaper than a full descent. Re-exports of the form
+ * Imports always live at the program (top) level in well-formed source, so a
+ * shallow scan over the program's named children is correct and noticeably
+ * cheaper than a full descent. Re-exports of the form
  * `export { x } from "./x.js"` are imports of `./x.js` for dependency-graph
  * purposes and are handled here too.
  */
@@ -358,294 +517,4 @@ const TS_RESOLVE_EXT: Record<string, string> = {
 }
 
 /**
- * Resolve a `./` or `../` relative TS/JS import specifier against the
- * importing file's path, returning the on-disk-relative path of the imported
- * module, or null if resolution can't be done deterministically:
- *
- *   - bare specifiers (`react`, `node:fs`)
- *   - extensionless or directory imports (we do NOT probe `index.ts`)
- *   - paths that escape the repo root
- *
- * This is deliberately filesystem-free; the result is a stable string the
- * caller turns into a File node id via `stableId`. When the import target
- * is later parsed, its File node will get the same id, so the File→File
- * IMPORTS edge connects automatically.
- */
-const resolveLocalTsImport = (
-	sourcePath: string,
-	specifier: string,
-): string | null => {
-	if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
-		return null
-	}
-	const lastSlash = sourcePath.lastIndexOf("/")
-	const dir = lastSlash >= 0 ? sourcePath.slice(0, lastSlash) : ""
-	const combined = dir ? `${dir}/${specifier}` : specifier
-	const parts: string[] = []
-	for (const segment of combined.split("/")) {
-		if (segment === "" || segment === ".") continue
-		if (segment === "..") {
-			if (parts.length === 0) return null
-			parts.pop()
-			continue
-		}
-		parts.push(segment)
-	}
-	if (parts.length === 0) return null
-	const resolved = parts.join("/")
-	const lastSegStart = resolved.lastIndexOf("/")
-	const dotIdx = resolved.lastIndexOf(".")
-	if (dotIdx <= lastSegStart) {
-		// No extension on the final segment. Could be a directory import or
-		// a TS-style extensionless one. Either way we don't have enough
-		// information to map to a single on-disk path.
-		return null
-	}
-	const ext = resolved.slice(dotIdx)
-	const target = TS_RESOLVE_EXT[ext]
-	if (!target) return null
-	return `${resolved.slice(0, dotIdx)}${target}`
-}
-
-// ---- Public parser ---------------------------------------------------------
-
-export class TreeSitterParser implements Parser {
-	readonly languages: ReadonlyArray<Language> = SUPPORTED
-
-	private readonly tsParser: TreeSitterInstance
-	private readonly pyParser: TreeSitterInstance
-
-	constructor() {
-		this.tsParser = new TreeSitter()
-		this.tsParser.setLanguage(TypeScriptGrammars.typescript)
-		this.pyParser = new TreeSitter()
-		this.pyParser.setLanguage(PythonGrammar)
-	}
-
-	async parseFile(args: {
-		repoId: string
-		indexRunId: string
-		batchId: string
-		path: string
-		language: Language
-		source: string
-	}): Promise<ParseResult> {
-		const nodes: GraphNode[] = []
-		const edges: GraphEdge[] = []
-
-		// File node — emitted unconditionally so every parsed file shows up
-		// in the graph, even when the language is out of scope for Phase 2.
-		const totalLines = Math.max(1, args.source.split("\n").length)
-		const fileQName = args.path
-		const fileNodeId = stableId({
-			repoId: args.repoId,
-			relativePath: args.path,
-			symbolKind: "File",
-			qualifiedName: fileQName,
-		})
-		const fileContentHash = contentId({
-			normalizedSignature: normalizeSignature(""),
-			normalizedBody: normalizeBody(args.source),
-		})
-		const fileNode: GraphNode = GraphNodeSchema.parse({
-			id: fileNodeId,
-			contentHash: fileContentHash,
-			repoId: args.repoId,
-			indexRunId: args.indexRunId,
-			batchId: args.batchId,
-			sourcePath: args.path,
-			schemaVersion: SCHEMA_VERSION,
-			path: args.path,
-			kind: "File",
-			language: args.language,
-			qualifiedName: fileQName,
-			signature: "",
-			evidence: { startLine: 1, endLine: totalLines },
-		})
-		nodes.push(fileNode)
-
-		if (!SUPPORTED.includes(args.language)) {
-			return { nodes, edges }
-		}
-
-		const parser =
-			args.language === "python" ? this.pyParser : this.tsParser
-		const tree = parser.parse(args.source)
-
-		// --- Decls (Phase 2A) ---
-		const decls =
-			args.language === "python"
-				? collectPython(tree.rootNode, args.source)
-				: collectTypescript(tree.rootNode, args.source)
-
-		for (const decl of decls) {
-			const qualifiedName = qualifiedNameFor(args.path, decl)
-			const id = stableId({
-				repoId: args.repoId,
-				relativePath: args.path,
-				symbolKind: decl.kind,
-				qualifiedName,
-			})
-			const cId = contentId({
-				normalizedSignature: normalizeSignature(decl.signature),
-				normalizedBody: normalizeBody(decl.bodyText),
-			})
-			const node: GraphNode = GraphNodeSchema.parse({
-				id,
-				contentHash: cId,
-				repoId: args.repoId,
-				indexRunId: args.indexRunId,
-				batchId: args.batchId,
-				sourcePath: args.path,
-				schemaVersion: SCHEMA_VERSION,
-				path: args.path,
-				kind: decl.kind,
-				language: args.language,
-				qualifiedName,
-				signature: decl.signature,
-				evidence: { startLine: decl.startLine, endLine: decl.endLine },
-			})
-			nodes.push(node)
-
-			const edgeHash = edgeContentHash({
-				src: fileNodeId,
-				type: "CONTAINS",
-				dst: id,
-			})
-			const edge: GraphEdge = GraphEdgeSchema.parse({
-				src: fileNodeId,
-				dst: id,
-				type: "CONTAINS",
-				repoId: args.repoId,
-				indexRunId: args.indexRunId,
-				batchId: args.batchId,
-				sourcePath: args.path,
-				contentHash: edgeHash,
-				schemaVersion: SCHEMA_VERSION,
-			})
-			edges.push(edge)
-		}
-
-		// --- Imports (Phase 2B) ---
-		//
-		// Every import statement gets:
-		//   - one Import node (deduped by stable id within the file)
-		//   - File→Import CONTAINS edge
-		//   - File→Import IMPORTS edge
-		//
-		// TS/JS local relative imports additionally get a File→File IMPORTS
-		// edge using the deterministically computed target File node id, so
-		// when the imported file is parsed later in the same run its File
-		// node id matches and the edge connects.
-		//
-		// Python imports never get File→File resolution — cross-module
-		// resolution is intentionally deferred to a later phase.
-		const importInfos =
-			args.language === "python"
-				? collectPythonImports(tree.rootNode, args.source)
-				: collectTypescriptImports(tree.rootNode, args.source)
-
-		const seenImportIds = new Set<string>()
-		for (const imp of importInfos) {
-			const qualifiedName = `${args.path}::import:${imp.specifier}`
-			const id = stableId({
-				repoId: args.repoId,
-				relativePath: args.path,
-				symbolKind: "Import",
-				qualifiedName,
-			})
-			if (!seenImportIds.has(id)) {
-				seenImportIds.add(id)
-				const cId = contentId({
-					normalizedSignature: normalizeSignature(imp.specifier),
-					normalizedBody: normalizeBody(imp.bodyText),
-				})
-				nodes.push(
-					GraphNodeSchema.parse({
-						id,
-						contentHash: cId,
-						repoId: args.repoId,
-						indexRunId: args.indexRunId,
-						batchId: args.batchId,
-						sourcePath: args.path,
-						schemaVersion: SCHEMA_VERSION,
-						path: args.path,
-						kind: "Import",
-						language: args.language,
-						qualifiedName,
-						signature: imp.specifier,
-						evidence: {
-							startLine: imp.startLine,
-							endLine: imp.endLine,
-						},
-					}),
-				)
-				edges.push(
-					GraphEdgeSchema.parse({
-						src: fileNodeId,
-						dst: id,
-						type: "CONTAINS",
-						repoId: args.repoId,
-						indexRunId: args.indexRunId,
-						batchId: args.batchId,
-						sourcePath: args.path,
-						contentHash: edgeContentHash({
-							src: fileNodeId,
-							type: "CONTAINS",
-							dst: id,
-						}),
-						schemaVersion: SCHEMA_VERSION,
-					}),
-				)
-				edges.push(
-					GraphEdgeSchema.parse({
-						src: fileNodeId,
-						dst: id,
-						type: "IMPORTS",
-						repoId: args.repoId,
-						indexRunId: args.indexRunId,
-						batchId: args.batchId,
-						sourcePath: args.path,
-						contentHash: edgeContentHash({
-							src: fileNodeId,
-							type: "IMPORTS",
-							dst: id,
-						}),
-						schemaVersion: SCHEMA_VERSION,
-					}),
-				)
-			}
-
-			if (args.language !== "python") {
-				const resolved = resolveLocalTsImport(args.path, imp.specifier)
-				if (resolved) {
-					const targetFileId = stableId({
-						repoId: args.repoId,
-						relativePath: resolved,
-						symbolKind: "File",
-						qualifiedName: resolved,
-					})
-					edges.push(
-						GraphEdgeSchema.parse({
-							src: fileNodeId,
-							dst: targetFileId,
-							type: "IMPORTS",
-							repoId: args.repoId,
-							indexRunId: args.indexRunId,
-							batchId: args.batchId,
-							sourcePath: args.path,
-							contentHash: edgeContentHash({
-								src: fileNodeId,
-								type: "IMPORTS",
-								dst: targetFileId,
-							}),
-							schemaVersion: SCHEMA_VERSION,
-						}),
-					)
-				}
-			}
-		}
-
-		return { nodes, edges }
-	}
-}
+ * Resolve a `./`
