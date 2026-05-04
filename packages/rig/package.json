@@ -19,6 +19,14 @@
     "./pyproject": {
       "types": "./dist/pyproject.d.ts",
       "import": "./dist/pyproject.js"
+    },
+    "./manual-yaml": {
+      "types": "./dist/manual-yaml.d.ts",
+      "import": "./dist/manual-yaml.js"
+    },
+    "./dispatcher": {
+      "types": "./dist/dispatcher.d.ts",
+      "import": "./dist/dispatcher.js"
     }
   },
   "main": "./dist/index.js",
@@ -32,6 +40,8 @@
   },
   "dependencies": {
     "@codesoul/core": "workspace:*",
-    "smol-toml": "1.6.1"
+    "smol-toml": "1.6.1",
+    "yaml": "2.8.3",
+    "zod": "4.4.2"
   }
 }

@@ -6,6 +6,8 @@ export default defineConfig({
 		"src/mock.ts",
 		"src/package-json.ts",
 		"src/pyproject.ts",
+		"src/manual-yaml.ts",
+		"src/dispatcher.ts",
 	],
 	format: ["esm"],
 	target: "node22",
