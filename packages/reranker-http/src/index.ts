@@ -4,3 +4,5 @@ export type {
 	HttpRerankRequest,
 	HttpRerankResponse,
 } from "./http-reranker.js"
+export { FallbackReranker } from "./fallback-reranker.js"
+export type { FallbackRerankerOptions } from "./fallback-reranker.js"
