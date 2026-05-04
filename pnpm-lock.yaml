@@ -41,6 +41,9 @@ importers:
       '@codesoul/embedder':
         specifier: workspace:*
         version: link:../../packages/embedder
+      '@codesoul/embedder-http':
+        specifier: workspace:*
+        version: link:../../packages/embedder-http
       '@codesoul/graph-store':
         specifier: workspace:*
         version: link:../../packages/graph-store
@@ -56,6 +59,9 @@ importers:
       '@codesoul/reranker':
         specifier: workspace:*
         version: link:../../packages/reranker
+      '@codesoul/reranker-http':
+        specifier: workspace:*
+        version: link:../../packages/reranker-http
       '@codesoul/retrieval':
         specifier: workspace:*
         version: link:../../packages/retrieval
@@ -184,6 +190,18 @@ importers:
       '@codesoul/core':
         specifier: workspace:*
         version: link:../core
+
+  packages/reranker-http:
+    dependencies:
+      '@codesoul/core':
+        specifier: workspace:*
+        version: link:../core
+      '@codesoul/reranker':
+        specifier: workspace:*
+        version: link:../reranker
+      zod:
+        specifier: 4.4.2
+        version: 4.4.2
 
   packages/retrieval:
     dependencies:

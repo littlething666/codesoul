@@ -33,7 +33,7 @@ const stubManifest = (input: {
 		committedAt: input.dryRun ? null : "2026-01-01T00:00:00.000Z",
 		checksum: "x",
 		schemaVersion: 1,
-	}),
+	},
 	nodeCount: 0,
 	edgeCount: 0,
 	vectorCount: 0,
