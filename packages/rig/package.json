@@ -44,6 +44,7 @@
   },
   "dependencies": {
     "@codesoul/core": "workspace:*",
+    "execa": "9.6.1",
     "smol-toml": "1.6.1",
     "yaml": "2.8.3",
     "zod": "4.4.2"
