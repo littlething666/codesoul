@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
+import { MockParser } from "@codesoul/parser/mock"
+import { TreeSitterParser } from "@codesoul/parser/tree-sitter"
 import type { Phase0Deps } from "../wiring.js"
 import { wirePhase0 } from "../wiring.js"
 import { buildProgram } from "../program.js"
@@ -90,5 +92,52 @@ describe("codesoul index", () => {
 			repoPath: "./fixtures/tiny-ts-lib",
 			dryRun: true,
 		})
+	})
+})
+
+describe("wirePhase0", () => {
+	it("defaults to regex parser (MockParser)", () => {
+		const deps = wirePhase0()
+		expect(deps.config.parser).toBe("regex")
+		expect(deps.parser).toBeInstanceOf(MockParser)
+	})
+
+	it("accepts an explicit { parser: 'regex' } override", () => {
+		const deps = wirePhase0({ parser: "regex" })
+		expect(deps.config.parser).toBe("regex")
+		expect(deps.parser).toBeInstanceOf(MockParser)
+	})
+
+	it("selects TreeSitterParser when parser: 'tree-sitter'", () => {
+		const deps = wirePhase0({ parser: "tree-sitter" })
+		expect(deps.config.parser).toBe("tree-sitter")
+		expect(deps.parser).toBeInstanceOf(TreeSitterParser)
+	})
+
+	it("keeps non-parser config fields at their defaults when overriding parser", () => {
+		const deps = wirePhase0({ parser: "tree-sitter" })
+		expect(deps.config).toMatchObject({
+			parser: "tree-sitter",
+			graphStore: "memory",
+			vectorStore: "memory",
+			embedder: "mock",
+			reranker: "mock",
+			rigExtractors: [],
+			enableSpade: false,
+		})
+	})
+
+	it("end-to-end: tree-sitter wiring parses a Method via FixtureIndexer parser", async () => {
+		const deps = wirePhase0({ parser: "tree-sitter" })
+		const result = await deps.parser.parseFile({
+			repoId: "r",
+			indexRunId: "run_test",
+			batchId: "batch_test",
+			path: "src/farewell.ts",
+			language: "typescript",
+			source: `export class Farewell {\n\thi(): string { return \"hi\" }\n}\n`,
+		})
+		const kinds = result.nodes.map((n) => `${n.kind}:${n.qualifiedName}`)
+		expect(kinds).toContain("Method:src/farewell.ts::Farewell.hi")
 	})
 })
