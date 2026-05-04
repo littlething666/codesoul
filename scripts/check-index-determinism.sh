@@ -16,6 +16,7 @@ cd "$REPO_ROOT"
 
 FIXTURES=(
 	"fixtures/tiny-ts-lib"
+	"fixtures/medium-ts-lib"
 )
 PARSERS=("regex" "tree-sitter")
 
