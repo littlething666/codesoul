@@ -18,11 +18,13 @@
   "dependencies": {
     "@codesoul/core": "workspace:*",
     "@codesoul/embedder": "workspace:*",
+    "@codesoul/embedder-http": "workspace:*",
     "@codesoul/graph-store": "workspace:*",
     "@codesoul/indexer": "workspace:*",
     "@codesoul/manifest-store": "workspace:*",
     "@codesoul/parser": "workspace:*",
     "@codesoul/reranker": "workspace:*",
+    "@codesoul/reranker-http": "workspace:*",
     "@codesoul/retrieval": "workspace:*",
     "@codesoul/rig": "workspace:*",
     "@codesoul/summarizer": "workspace:*",
