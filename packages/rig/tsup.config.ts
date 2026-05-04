@@ -1,7 +1,14 @@
 import { defineConfig } from "tsup"
 
 export default defineConfig({
-	entry: ["src/index.ts", "src/mock.ts"],
+	entry: [
+		"src/index.ts",
+		"src/mock.ts",
+		"src/package-json.ts",
+		"src/pyproject.ts",
+		"src/manual-yaml.ts",
+		"src/dispatcher.ts",
+	],
 	format: ["esm"],
 	target: "node22",
 	dts: true,

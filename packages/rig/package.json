@@ -11,6 +11,22 @@
     "./mock": {
       "types": "./dist/mock.d.ts",
       "import": "./dist/mock.js"
+    },
+    "./package-json": {
+      "types": "./dist/package-json.d.ts",
+      "import": "./dist/package-json.js"
+    },
+    "./pyproject": {
+      "types": "./dist/pyproject.d.ts",
+      "import": "./dist/pyproject.js"
+    },
+    "./manual-yaml": {
+      "types": "./dist/manual-yaml.d.ts",
+      "import": "./dist/manual-yaml.js"
+    },
+    "./dispatcher": {
+      "types": "./dist/dispatcher.d.ts",
+      "import": "./dist/dispatcher.js"
     }
   },
   "main": "./dist/index.js",
@@ -23,6 +39,9 @@
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {
-    "@codesoul/core": "workspace:*"
+    "@codesoul/core": "workspace:*",
+    "smol-toml": "1.6.1",
+    "yaml": "2.8.3",
+    "zod": "4.4.2"
   }
 }
