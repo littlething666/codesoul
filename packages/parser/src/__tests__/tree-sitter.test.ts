@@ -3,6 +3,7 @@ import {
 	GraphEdge as GraphEdgeSchema,
 	GraphNode as GraphNodeSchema,
 	edgeContentHash,
+	stableId,
 } from "@codesoul/core"
 import type { ParseResult } from "../parser.js"
 import { TreeSitterParser } from "../tree-sitter.js"
@@ -74,21 +75,26 @@ describe("TreeSitterParser", () => {
 		expect(kinds).toContain("Function:src/greet.ts::greetMany")
 	})
 
-	it("emits only the File node for re-export indexes", async () => {
+	it("emits Import nodes (no Class/Function/Method) for re-export indexes", async () => {
 		const r = await parse(
 			"typescript",
 			"src/index.ts",
-			`export { greet, greetMany } from \"./greet.js\"\nexport { farewell, Farewell } from \"./farewell.js\"\n`,
+			`export { greet, greetMany } from "./greet.js"\nexport { farewell, Farewell } from "./farewell.js"\n`,
 		)
-		const kinds = r.nodes.map((n) => n.kind)
-		expect(kinds).toEqual(["File"])
+		const kinds = r.nodes.map((n) => n.kind).sort()
+		expect(kinds).toEqual(["File", "Import", "Import"])
+		const importSpecs = r.nodes
+			.filter((n) => n.kind === "Import")
+			.map((n) => n.signature)
+			.sort()
+		expect(importSpecs).toEqual(["./farewell.js", "./greet.js"])
 	})
 
 	it("emits Python top-level def/class AND every method", async () => {
 		const r = await parse(
 			"python",
 			"src/greet.py",
-			`def greet(name: str) -> str:\n    return f\"Hello, {name}!\"\n\n\nclass Greeter:\n    def __init__(self, name: str) -> None:\n        self.name = name\n\n    def message(self) -> str:\n        return greet(self.name)\n`,
+			`def greet(name: str) -> str:\n    return f"Hello, {name}!"\n\n\nclass Greeter:\n    def __init__(self, name: str) -> None:\n        self.name = name\n\n    def message(self) -> str:\n        return greet(self.name)\n`,
 		)
 		const kinds = r.nodes.map((n) => `${n.kind}:${n.qualifiedName}`)
 		expect(kinds).toContain("File:src/greet.py")
@@ -110,15 +116,22 @@ describe("TreeSitterParser", () => {
 		const file = r.nodes.find((n) => n.kind === "File")
 		expect(file).toBeDefined()
 		if (!file) return
-		const decls = r.nodes.filter((n) => n.kind !== "File")
+		const decls = r.nodes.filter(
+			(n) =>
+				n.kind === "Class" ||
+				n.kind === "Function" ||
+				n.kind === "Method",
+		)
 		expect(decls.length).toBeGreaterThanOrEqual(3) // a, B, B.m
 		for (const decl of decls) {
 			const edge = r.edges.find(
-				(e) => e.src === file.id && e.dst === decl.id,
+				(e) =>
+					e.src === file.id &&
+					e.dst === decl.id &&
+					e.type === "CONTAINS",
 			)
 			expect(edge).toBeDefined()
 			if (!edge) continue
-			expect(edge.type).toBe("CONTAINS")
 			expect(edge.contentHash).toBe(
 				edgeContentHash({
 					src: edge.src,
@@ -183,5 +196,210 @@ describe("TreeSitterParser", () => {
 		})
 		expect(r.nodes.map((n) => n.kind)).toEqual(["File"])
 		expect(r.edges).toHaveLength(0)
+	})
+})
+
+describe("TreeSitterParser imports (Phase 2B)", () => {
+	it("emits an Import node and IMPORTS edge for a TS import statement", async () => {
+		const r = await parse(
+			"typescript",
+			"src/index.ts",
+			`import { greet } from "./greet.js"\n`,
+		)
+		const importNode = r.nodes.find((n) => n.kind === "Import")
+		expect(importNode).toBeDefined()
+		expect(importNode?.qualifiedName).toBe(
+			"src/index.ts::import:./greet.js",
+		)
+		expect(importNode?.signature).toBe("./greet.js")
+
+		const fileNode = r.nodes.find((n) => n.kind === "File")
+		expect(fileNode).toBeDefined()
+		if (!fileNode || !importNode) return
+
+		const importsEdge = r.edges.find(
+			(e) =>
+				e.src === fileNode.id &&
+				e.dst === importNode.id &&
+				e.type === "IMPORTS",
+		)
+		expect(importsEdge).toBeDefined()
+
+		const containsEdge = r.edges.find(
+			(e) =>
+				e.src === fileNode.id &&
+				e.dst === importNode.id &&
+				e.type === "CONTAINS",
+		)
+		expect(containsEdge).toBeDefined()
+	})
+
+	it("treats `export ... from` re-exports as imports", async () => {
+		const r = await parse(
+			"typescript",
+			"src/index.ts",
+			`export { greet } from "./greet.js"\nexport { farewell } from "./farewell.js"\n`,
+		)
+		const importSpecs = r.nodes
+			.filter((n) => n.kind === "Import")
+			.map((n) => n.signature)
+			.sort()
+		expect(importSpecs).toEqual(["./farewell.js", "./greet.js"])
+	})
+
+	it("resolves TS local relative imports to a File→File IMPORTS edge", async () => {
+		const r = await parse(
+			"typescript",
+			"src/index.ts",
+			`import { greet } from "./greet.js"\n`,
+		)
+		const fileNode = r.nodes.find((n) => n.kind === "File")
+		expect(fileNode).toBeDefined()
+		if (!fileNode) return
+
+		// Determinism: the resolved target file id must equal what `stableId`
+		// produces for `src/greet.ts` — i.e. what the parser will emit when
+		// it later parses that file.
+		const greetFileId = stableId({
+			repoId: "r",
+			relativePath: "src/greet.ts",
+			symbolKind: "File",
+			qualifiedName: "src/greet.ts",
+		})
+		const fileToFileEdge = r.edges.find(
+			(e) =>
+				e.src === fileNode.id &&
+				e.dst === greetFileId &&
+				e.type === "IMPORTS",
+		)
+		expect(fileToFileEdge).toBeDefined()
+		expect(fileToFileEdge?.contentHash).toBe(
+			edgeContentHash({
+				src: fileNode.id,
+				type: "IMPORTS",
+				dst: greetFileId,
+			}),
+		)
+
+		// Sanity check: parsing the target file actually produces that id.
+		const greetParse = await parse("typescript", "src/greet.ts", "")
+		expect(greetParse.nodes[0]?.id).toBe(greetFileId)
+	})
+
+	it("resolves `../` parent imports relative to the source file's directory", async () => {
+		const r = await parse(
+			"typescript",
+			"src/sub/x.ts",
+			`import { y } from "../y.js"\n`,
+		)
+		const fileNode = r.nodes.find((n) => n.kind === "File")
+		expect(fileNode).toBeDefined()
+		if (!fileNode) return
+		const yFileId = stableId({
+			repoId: "r",
+			relativePath: "src/y.ts",
+			symbolKind: "File",
+			qualifiedName: "src/y.ts",
+		})
+		expect(
+			r.edges.some(
+				(e) =>
+					e.src === fileNode.id &&
+					e.dst === yFileId &&
+					e.type === "IMPORTS",
+			),
+		).toBe(true)
+	})
+
+	it("does NOT emit a File→File edge for bare TS module specifiers", async () => {
+		const r = await parse(
+			"typescript",
+			"src/x.ts",
+			`import * as React from "react"\n`,
+		)
+		const importNode = r.nodes.find((n) => n.kind === "Import")
+		expect(importNode).toBeDefined()
+		if (!importNode) return
+		// Only one IMPORTS edge: File → Import. No resolved File→File edge.
+		const importsEdges = r.edges.filter((e) => e.type === "IMPORTS")
+		expect(importsEdges.length).toBe(1)
+		expect(importsEdges[0]?.dst).toBe(importNode.id)
+	})
+
+	it("does NOT emit a File→File edge for extensionless / directory specifiers", async () => {
+		const r = await parse(
+			"typescript",
+			"src/x.ts",
+			`import { y } from "./y"\n`,
+		)
+		const importNode = r.nodes.find((n) => n.kind === "Import")
+		expect(importNode).toBeDefined()
+		if (!importNode) return
+		const importsEdges = r.edges.filter((e) => e.type === "IMPORTS")
+		expect(importsEdges.length).toBe(1)
+		expect(importsEdges[0]?.dst).toBe(importNode.id)
+	})
+
+	it("emits a Python Import node for `import os`", async () => {
+		const r = await parse("python", "src/x.py", `import os\n`)
+		const importNodes = r.nodes.filter((n) => n.kind === "Import")
+		expect(importNodes).toHaveLength(1)
+		expect(importNodes[0]?.qualifiedName).toBe("src/x.py::import:os")
+	})
+
+	it("emits one Python Import per name in `import os, sys`", async () => {
+		const r = await parse("python", "src/x.py", `import os, sys\n`)
+		const specs = r.nodes
+			.filter((n) => n.kind === "Import")
+			.map((n) => n.signature)
+			.sort()
+		expect(specs).toEqual(["os", "sys"])
+	})
+
+	it("emits a single Python Import for `from foo import bar, baz`", async () => {
+		const r = await parse(
+			"python",
+			"src/x.py",
+			`from foo import bar, baz\n`,
+		)
+		const importNodes = r.nodes.filter((n) => n.kind === "Import")
+		expect(importNodes).toHaveLength(1)
+		expect(importNodes[0]?.qualifiedName).toBe("src/x.py::import:foo")
+	})
+
+	it("does NOT emit File→File edges for any Python imports", async () => {
+		const r = await parse(
+			"python",
+			"src/x.py",
+			`import os\nfrom foo import bar\n`,
+		)
+		const importNodes = r.nodes.filter((n) => n.kind === "Import")
+		const importNodeIds = new Set(importNodes.map((n) => n.id))
+		const importsEdges = r.edges.filter((e) => e.type === "IMPORTS")
+		// Every IMPORTS edge must terminate at one of the locally-emitted
+		// Import nodes; no File→File edges allowed for Python.
+		for (const e of importsEdges) {
+			expect(importNodeIds.has(e.dst)).toBe(true)
+		}
+	})
+
+	it("dedupes duplicate same-specifier imports within a file", async () => {
+		const r = await parse(
+			"typescript",
+			"src/x.ts",
+			`import { a } from "./a.js"\nimport { b } from "./a.js"\n`,
+		)
+		const importNodes = r.nodes.filter((n) => n.kind === "Import")
+		expect(importNodes).toHaveLength(1)
+	})
+
+	it("validates Import nodes and IMPORTS edges against the schemas", async () => {
+		const r = await parse(
+			"typescript",
+			"src/x.ts",
+			`import { greet } from "./greet.js"\nimport * as React from "react"\n`,
+		)
+		for (const n of r.nodes) GraphNodeSchema.parse(n)
+		for (const e of r.edges) GraphEdgeSchema.parse(e)
 	})
 })
