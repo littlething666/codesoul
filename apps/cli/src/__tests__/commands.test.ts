@@ -10,6 +10,32 @@ const makeDeps = (overrides: Partial<Phase0Deps> = {}): Phase0Deps => {
 	return { ...base, ...overrides }
 }
 
+const stubManifest = (input: {
+	repoId: string
+	indexRunId: string
+	repoPath: string
+	dryRun?: boolean
+}) => ({
+	manifest: {
+		batchId: "batch_t",
+		indexRunId: input.indexRunId,
+		repoId: input.repoId,
+		sourcePath: input.repoPath,
+		sourceContentHash: `cnt_${"a".repeat(40)}`,
+		status: input.dryRun ? "dry_run" : "committed",
+		nodeCount: 0,
+		edgeCount: 0,
+		vectorCount: 0,
+		createdAt: "2026-01-01T00:00:00.000Z",
+		committedAt: input.dryRun ? null : "2026-01-01T00:00:00.000Z",
+		checksum: "x",
+		schemaVersion: 1,
+	},
+	nodeCount: 0,
+	edgeCount: 0,
+	vectorCount: 0,
+})
+
 describe("codesoul query --limit", () => {
 	it("rejects non-integer values", async () => {
 		const deps = makeDeps()
@@ -54,26 +80,7 @@ describe("codesoul index", () => {
 			indexer: {
 				async indexRepository(input) {
 					calls.push(input as unknown as Record<string, unknown>)
-					return {
-						manifest: {
-							batchId: "batch_t",
-							indexRunId: input.indexRunId,
-							repoId: input.repoId,
-							sourcePath: input.repoPath,
-							sourceContentHash: `cnt_${"a".repeat(40)}`,
-							status: input.dryRun ? "dry_run" : "committed",
-							nodeCount: 0,
-							edgeCount: 0,
-							vectorCount: 0,
-							createdAt: "2026-01-01T00:00:00.000Z",
-							committedAt: input.dryRun ? null : "2026-01-01T00:00:00.000Z",
-							checksum: "x",
-							schemaVersion: 1,
-						},
-						nodeCount: 0,
-						edgeCount: 0,
-						vectorCount: 0,
-					}
+					return stubManifest(input)
 				},
 			},
 		}
@@ -92,6 +99,86 @@ describe("codesoul index", () => {
 			repoPath: "./fixtures/tiny-ts-lib",
 			dryRun: true,
 		})
+	})
+
+	it("rejects unknown --parser modes", async () => {
+		const deps = makeDeps()
+		const program = buildProgram(deps).exitOverride()
+		await expect(
+			program.parseAsync(
+				["index", "./fixtures/tiny-ts-lib", "--dry-run", "--parser", "foo"],
+				{ from: "user" },
+			),
+		).rejects.toBeInstanceOf(Error)
+	})
+
+	it("--parser regex uses the injected deps.indexer (no re-wire)", async () => {
+		let invocations = 0
+		const base = wirePhase0()
+		const deps: Phase0Deps = {
+			...base,
+			indexer: {
+				async indexRepository(input) {
+					invocations++
+					return stubManifest(input)
+				},
+			},
+		}
+		const program = buildProgram(deps).exitOverride()
+		const spy = vi.spyOn(console, "log").mockImplementation(() => {})
+		try {
+			await program.parseAsync(
+				[
+					"index",
+					"./fixtures/tiny-ts-lib",
+					"--dry-run",
+					"--parser",
+					"regex",
+				],
+				{ from: "user" },
+			)
+		} finally {
+			spy.mockRestore()
+		}
+		expect(invocations).toBe(1)
+	})
+
+	it("--parser tree-sitter bypasses the injected deps.indexer (proves re-wire)", async () => {
+		let invocations = 0
+		const base = wirePhase0()
+		const deps: Phase0Deps = {
+			...base,
+			indexer: {
+				async indexRepository(input) {
+					invocations++
+					return stubManifest(input)
+				},
+			},
+		}
+		const program = buildProgram(deps).exitOverride()
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+		const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+		// The re-wired branch creates a fresh real FixtureIndexer that will
+		// try to read the sentinel path from disk and throw — we tolerate that
+		// failure and only assert that the injected stub indexer was bypassed.
+		try {
+			await program
+				.parseAsync(
+					[
+						"index",
+						"/no/such/codesoul/fixture/path",
+						"--dry-run",
+						"--parser",
+						"tree-sitter",
+					],
+					{ from: "user" },
+				)
+				.catch(() => undefined)
+		} finally {
+			logSpy.mockRestore()
+			errSpy.mockRestore()
+		}
+		expect(invocations).toBe(0)
 	})
 })
 
