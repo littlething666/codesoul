@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest"
 import type { IndexRepositoryResult } from "@codesoul/indexer"
 import { MockParser } from "@codesoul/parser/mock"
 import { TreeSitterParser } from "@codesoul/parser/tree-sitter"
+import { RigDispatcher } from "@codesoul/rig/dispatcher"
+import { MockRigExtractor } from "@codesoul/rig/mock"
 import type { Phase0Deps } from "../wiring.js"
 import { wirePhase0 } from "../wiring.js"
 import { buildProgram } from "../program.js"
@@ -31,7 +33,7 @@ const stubManifest = (input: {
 		committedAt: input.dryRun ? null : "2026-01-01T00:00:00.000Z",
 		checksum: "x",
 		schemaVersion: 1,
-	},
+	}, // 1
 	nodeCount: 0,
 	edgeCount: 0,
 	vectorCount: 0,
@@ -181,6 +183,89 @@ describe("codesoul index", () => {
 		}
 		expect(invocations).toBe(0)
 	})
+
+	it("rejects unknown --rig-extractors entries", async () => {
+		const deps = makeDeps()
+		const program = buildProgram(deps).exitOverride()
+		await expect(
+			program.parseAsync(
+				[
+					"index",
+					"./fixtures/tiny-ts-lib",
+					"--dry-run",
+					"--rig-extractors",
+					"package-json,bogus",
+				],
+				{ from: "user" },
+			),
+		).rejects.toBeInstanceOf(Error)
+	})
+
+	it("--rig-extractors '' uses the injected deps.indexer (no re-wire)", async () => {
+		let invocations = 0
+		const base = wirePhase0()
+		const deps: Phase0Deps = {
+			...base,
+			indexer: {
+				async indexRepository(input) {
+					invocations++
+					return stubManifest(input)
+				},
+			},
+		}
+		const program = buildProgram(deps).exitOverride()
+		const spy = vi.spyOn(console, "log").mockImplementation(() => {})
+		try {
+			await program.parseAsync(
+				[
+					"index",
+					"./fixtures/tiny-ts-lib",
+					"--dry-run",
+					"--rig-extractors",
+					"",
+				],
+				{ from: "user" },
+			)
+		} finally {
+			spy.mockRestore()
+		}
+		expect(invocations).toBe(1)
+	})
+
+	it("--rig-extractors package-json bypasses the injected deps.indexer (proves re-wire)", async () => {
+		let invocations = 0
+		const base = wirePhase0()
+		const deps: Phase0Deps = {
+			...base,
+			indexer: {
+				async indexRepository(input) {
+					invocations++
+					return stubManifest(input)
+				},
+			},
+		}
+		const program = buildProgram(deps).exitOverride()
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+		const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+		try {
+			await program
+				.parseAsync(
+					[
+						"index",
+						"/no/such/codesoul/fixture/path",
+						"--dry-run",
+						"--rig-extractors",
+						"package-json",
+					],
+					{ from: "user" },
+				)
+				.catch(() => undefined)
+		} finally {
+			logSpy.mockRestore()
+			errSpy.mockRestore()
+		}
+		expect(invocations).toBe(0)
+	})
 })
 
 describe("wirePhase0", () => {
@@ -227,5 +312,27 @@ describe("wirePhase0", () => {
 		})
 		const kinds = result.nodes.map((n) => `${n.kind}:${n.qualifiedName}`)
 		expect(kinds).toContain("Method:src/farewell.ts::Farewell.hi")
+	})
+
+	it("defaults rig to MockRigExtractor when rigExtractors is empty", () => {
+		const deps = wirePhase0()
+		expect(deps.config.rigExtractors).toEqual([])
+		expect(deps.rig).toBeInstanceOf(MockRigExtractor)
+	})
+
+	it("selects RigDispatcher when rigExtractors is non-empty", () => {
+		const deps = wirePhase0({
+			rigExtractors: ["package-json", "pyproject"],
+		})
+		expect(deps.config.rigExtractors).toEqual([
+			"package-json",
+			"pyproject",
+		])
+		expect(deps.rig).toBeInstanceOf(RigDispatcher)
+	})
+
+	it("falls back to MockRigExtractor when only unimplemented kinds (spade) are configured", () => {
+		const deps = wirePhase0({ rigExtractors: ["spade"] })
+		expect(deps.rig).toBeInstanceOf(MockRigExtractor)
 	})
 })

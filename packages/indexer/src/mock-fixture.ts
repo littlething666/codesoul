@@ -18,6 +18,7 @@ import type {
 	Indexer,
 	IndexerDeps,
 } from "./indexer.js"
+import { materializeRigGraph } from "./rig-materialize.js"
 import { type Clock, SystemClock } from "./time.js"
 
 const LANG_BY_EXT: Record<string, Language> = {
@@ -120,11 +121,12 @@ export type FixtureIndexerDeps = IndexerDeps & {
  * persists every batch through `@codesoul/manifest-store`:
  *
  *   1. Parse + buildBatch (counts known)
- *   2. recordBatch(pending) — durable, with the creation event row
- *   3. Persist nodes / edges / vectors (skipped on dryRun)
- *   4. transitionBatch -> committed (or dry_run)
+ *   2. Materialize RigGraph -> graph nodes/edges (Phase 7e)
+ *   3. recordBatch(pending) — durable, with the creation event row
+ *   4. Persist nodes / edges / vectors (skipped on dryRun)
+ *   5. transitionBatch -> committed (or dry_run)
  *
- * If step 3 throws, the batch is transitioned to `failed` and the error
+ * If step 4 throws, the batch is transitioned to `failed` and the error
  * is rethrown so the WAL is never left ambiguous.
  */
 export class FixtureIndexer implements Indexer {
@@ -146,7 +148,6 @@ export class FixtureIndexer implements Indexer {
 		const startedAt = this.clock.nowIso()
 
 		await stat(input.repoPath)
-		await this.deps.rig.extract(input.repoPath)
 
 		const filePaths: string[] = []
 		await walk(input.repoPath, filePaths)
@@ -167,12 +168,28 @@ export class FixtureIndexer implements Indexer {
 			digests.push({ relativePath: relPath, sha1: sha1(source) })
 		}
 
-		const { nodes, edges, vectorInputs } = await buildBatch(this.deps.parser, {
+		const {
+			nodes: parsedNodes,
+			edges: parsedEdges,
+			vectorInputs,
+		} = await buildBatch(this.deps.parser, {
 			repoId: input.repoId,
 			indexRunId: input.indexRunId,
 			batchId,
 			files: loaded,
 		})
+
+		// Phase 7e: extract the RIG graph and materialize it into the same
+		// node/edge stream as parser output. The dispatcher (or a single
+		// extractor) is wired in via `wirePhase0` from `IndexConfig.rigExtractors`.
+		const rigGraph = await this.deps.rig.extract(input.repoPath)
+		const rigBatch = materializeRigGraph(rigGraph, {
+			repoId: input.repoId,
+			indexRunId: input.indexRunId,
+			batchId,
+		})
+		const nodes = [...parsedNodes, ...rigBatch.nodes]
+		const edges = [...parsedEdges, ...rigBatch.edges]
 
 		const allVectors: VectorRow[] = []
 		if (vectorInputs.length > 0) {
