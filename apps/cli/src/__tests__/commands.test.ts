@@ -33,7 +33,7 @@ const stubManifest = (input: {
 		committedAt: input.dryRun ? null : "2026-01-01T00:00:00.000Z",
 		checksum: "x",
 		schemaVersion: 1,
-	}, // 1
+	},
 	nodeCount: 0,
 	edgeCount: 0,
 	vectorCount: 0,
@@ -331,8 +331,8 @@ describe("wirePhase0", () => {
 		expect(deps.rig).toBeInstanceOf(RigDispatcher)
 	})
 
-	it("falls back to MockRigExtractor when only unimplemented kinds (spade) are configured", () => {
+	it("selects RigDispatcher when only spade is configured (Phase 7d)", () => {
 		const deps = wirePhase0({ rigExtractors: ["spade"] })
-		expect(deps.rig).toBeInstanceOf(MockRigExtractor)
+		expect(deps.rig).toBeInstanceOf(RigDispatcher)
 	})
 })

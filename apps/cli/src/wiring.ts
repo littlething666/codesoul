@@ -19,6 +19,7 @@ import { ManualYamlRigExtractor } from "@codesoul/rig/manual-yaml"
 import { MockRigExtractor } from "@codesoul/rig/mock"
 import { PackageJsonRigExtractor } from "@codesoul/rig/package-json"
 import { PyProjectRigExtractor } from "@codesoul/rig/pyproject"
+import { SpadeCMakeRigExtractor } from "@codesoul/rig/spade-cmake"
 import { MockSummarizer } from "@codesoul/summarizer/mock"
 import { MockVectorStore } from "@codesoul/vector-store/mock"
 import { FixtureIndexer } from "@codesoul/indexer"
@@ -47,7 +48,7 @@ const buildParser = (mode: IndexConfig["parser"]): Parser => {
 	}
 }
 
-const buildRigExtractor = (kind: RigExtractorKind): RigExtractor | null => {
+const buildRigExtractor = (kind: RigExtractorKind): RigExtractor => {
 	switch (kind) {
 		case "package-json":
 			return new PackageJsonRigExtractor()
@@ -56,11 +57,7 @@ const buildRigExtractor = (kind: RigExtractorKind): RigExtractor | null => {
 		case "manual":
 			return new ManualYamlRigExtractor()
 		case "spade":
-			// Phase 7d (SpadeCMakeRigExtractor) is not yet implemented.
-			// Selecting it currently no-ops; the dispatcher composes the
-			// rest of the configured extractors. When the SPADE adapter
-			// lands, this branch returns `new SpadeCMakeRigExtractor()`.
-			return null
+			return new SpadeCMakeRigExtractor()
 	}
 }
 
@@ -71,12 +68,7 @@ const buildRig = (config: IndexConfig): RigExtractor => {
 		// dry-run smokes don't depend on filesystem layout.
 		return new MockRigExtractor()
 	}
-	const extractors: RigExtractor[] = []
-	for (const kind of config.rigExtractors) {
-		const extractor = buildRigExtractor(kind)
-		if (extractor) extractors.push(extractor)
-	}
-	if (extractors.length === 0) return new MockRigExtractor()
+	const extractors = config.rigExtractors.map(buildRigExtractor)
 	return new RigDispatcher(extractors)
 }
 
