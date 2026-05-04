@@ -2,7 +2,7 @@
 
 **CodeSoul** is a repository **architecture extraction layer** — not a vector retrieval toy. Every node and edge in the graph traces back to evidence in code, and every result is explainable.
 
-This repository is the **Phase 0** scaffold: a compiling, end-to-end skeleton with every architectural seam expressed as an interface and backed by deterministic mocks. No external services, no native parsers, no Neo4j, no LanceDB, no model server.
+This repository tracks the staged build-out from the **Phase 0** scaffold (compiling, end-to-end skeleton with deterministic mocks) toward the production design described in the planning doc. Phases 0–2C, 3, and 7a–7e are landed; Phase 5 (HTTP embedder/reranker + Python model server) is the active surface.
 
 See `Phase 0 — Interfaces & Core Schema` (in the planning doc) for the full design.
 
@@ -25,15 +25,21 @@ apps/
   cli/                   # Commander v14.0.3, ESM-only
 packages/
   core/                  # DTOs, IDs, manifests, errors, constants
-  parser/                # Parser interface + MockParser
-  rig/                   # RigExtractor interface + MockRigExtractor
+  parser/                # Parser interface + MockParser + TreeSitterParser
+  rig/                   # RigExtractor interface + dispatcher + per-format extractors
   graph-store/           # GraphStore interface + MockGraphStore
+  graph-store-neo4j/     # Neo4j 5.26-LTS adapter (Phase 3)
   vector-store/          # VectorStore interface + MockVectorStore
   embedder/              # Embedder interface + MockEmbedder
+  embedder-http/         # HttpEmbedder + FallbackEmbedder (Phase 5)
   reranker/              # Reranker interface + MockReranker
+  reranker-http/         # HttpReranker + FallbackReranker (Phase 5)
   summarizer/            # Summarizer interface + MockSummarizer
   retrieval/             # Hybrid retrieval skeleton
   indexer/               # Index pipeline state machine + FixtureIndexer
+  manifest-store/        # Durable batch/WAL store (memory + sqlite)
+workers/
+  model-server/          # FastAPI + Pydantic model server (Phase 5)
 fixtures/
   tiny-ts-lib/           # ~5K LOC TS fixture
   tiny-python-lib/       # ~5K LOC Python fixture
@@ -47,3 +53,36 @@ fixtures/
 - DTOs use camelCase. Adapters may translate to backend-specific naming.
 - Every package subpath is declared in `"exports"` (including `./mock`).
 - No `require`, no `__dirname`, no CJS shims.
+
+## HTTP embedder / reranker (Phase 5)
+
+The `mock` backend stays the default for tests and dry-runs. To run against the real model server:
+
+```bash
+# 1. Start the Python model server (stub backends, no GPU required)
+cd workers/model-server
+python -m venv .venv && source .venv/bin/activate
+pip install -e .[dev]
+codesoul-model-server  # listens on 0.0.0.0:8000
+
+# 2. Point the CLI at it
+export CODESOUL_EMBEDDER_URL=http://localhost:8000/embed
+export CODESOUL_EMBEDDER_MODEL=stub-embedder
+export CODESOUL_EMBEDDER_REVISION=0
+export CODESOUL_RERANKER_URL=http://localhost:8000/rerank
+export CODESOUL_RERANKER_MODEL=stub-reranker
+export CODESOUL_RERANKER_REVISION=0
+
+# Optional: degrade to mock if the server is down
+export CODESOUL_EMBEDDER_FALLBACK=mock
+export CODESOUL_RERANKER_FALLBACK=mock
+
+# 3. Use --embedder/--reranker http on either command
+pnpm --filter @codesoul/cli exec node dist/bin.js \
+  query "greet" --repo ./fixtures/tiny-ts-lib \
+  --embedder http --reranker http
+```
+
+Identity is verified at the response boundary: a server replying with vectors from a different `modelId@modelRevision` raises `EmbeddingCompatibilityError` (embedder) or `AdapterUnavailableError` (reranker) instead of silently corrupting search results.
+
+Real Qwen3-Embedding / Qwen3-Reranker backends are gated behind the `[models]` extra in `workers/model-server/pyproject.toml` and will land in a follow-up.

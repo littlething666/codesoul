@@ -1,5 +1,10 @@
 import { InvalidArgumentError, type Command } from "commander"
-import { ParserMode, RigExtractorKind } from "@codesoul/core"
+import {
+	EmbedderMode,
+	ParserMode,
+	RerankerMode,
+	RigExtractorKind,
+} from "@codesoul/core"
 import type { Phase0Deps } from "../wiring.js"
 import { wirePhase0 } from "../wiring.js"
 
@@ -9,6 +14,8 @@ type IndexOptions = {
 	dryRun: boolean
 	parser?: ParserMode
 	rigExtractors?: RigExtractorKind[]
+	embedder?: EmbedderMode
+	reranker?: RerankerMode
 }
 
 const parseParserMode = (value: string): ParserMode => {
@@ -17,6 +24,22 @@ const parseParserMode = (value: string): ParserMode => {
 		throw new InvalidArgumentError(
 			"must be one of: regex, tree-sitter",
 		)
+	}
+	return result.data
+}
+
+const parseEmbedderMode = (value: string): EmbedderMode => {
+	const result = EmbedderMode.safeParse(value)
+	if (!result.success) {
+		throw new InvalidArgumentError("must be one of: mock, http")
+	}
+	return result.data
+}
+
+const parseRerankerMode = (value: string): RerankerMode => {
+	const result = RerankerMode.safeParse(value)
+	if (!result.success) {
+		throw new InvalidArgumentError("must be one of: mock, http")
 	}
 	return result.data
 }
@@ -66,18 +89,39 @@ export const registerIndex = (program: Command, deps: Phase0Deps): void => {
 			"comma-separated RIG extractors (package-json,pyproject,manual,spade)",
 			parseRigExtractorList,
 		)
+		.option(
+			"--embedder <mode>",
+			"embedder backend (mock | http; http requires CODESOUL_EMBEDDER_URL/MODEL/REVISION)",
+			parseEmbedderMode,
+		)
+		.option(
+			"--reranker <mode>",
+			"reranker backend (mock | http; http requires CODESOUL_RERANKER_URL/MODEL/REVISION)",
+			parseRerankerMode,
+		)
 		.action(async (repoPath: string, opts: IndexOptions) => {
 			const parserChanged =
 				opts.parser !== undefined && opts.parser !== deps.config.parser
 			const rigChanged =
 				opts.rigExtractors !== undefined &&
 				!rigListsEqual(opts.rigExtractors, deps.config.rigExtractors)
+			const embedderChanged =
+				opts.embedder !== undefined &&
+				opts.embedder !== deps.config.embedder
+			const rerankerChanged =
+				opts.reranker !== undefined &&
+				opts.reranker !== deps.config.reranker
 			const active =
-				parserChanged || rigChanged
+				parserChanged ||
+				rigChanged ||
+				embedderChanged ||
+				rerankerChanged
 					? wirePhase0({
 							parser: opts.parser ?? deps.config.parser,
 							rigExtractors:
 								opts.rigExtractors ?? deps.config.rigExtractors,
+							embedder: opts.embedder ?? deps.config.embedder,
+							reranker: opts.reranker ?? deps.config.reranker,
 						})
 					: deps
 
@@ -95,6 +139,8 @@ export const registerIndex = (program: Command, deps: Phase0Deps): void => {
 						batchId: result.manifest.batchId,
 						parser: active.config.parser,
 						rigExtractors: active.config.rigExtractors,
+						embedder: active.config.embedder,
+						reranker: active.config.reranker,
 						nodes: result.nodeCount,
 						edges: result.edgeCount,
 						vectors: result.vectorCount,
