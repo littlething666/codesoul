@@ -12,12 +12,9 @@ import {
 } from "@codesoul/core"
 import type { Parser, ParseResult } from "./parser.js"
 
-// ---- Native binding loaders -------------------------------------------------
-//
 // `tree-sitter` and its grammar packages ship as CommonJS native modules.
-// Using `createRequire` keeps this file working under `"type": "module"` no
-// matter how downstream interop flags are configured, and confines the
-// untyped binding shape to this file.
+// `createRequire` keeps this file working under `"type": "module"` regardless
+// of downstream interop flags and confines the untyped binding shape here.
 const require = createRequire(import.meta.url)
 
 interface SyntaxNode {
@@ -52,7 +49,7 @@ const TypeScriptGrammars = require("tree-sitter-typescript") as {
 }
 const PythonGrammar = require("tree-sitter-python") as unknown
 
-// ---- Decl extraction (Phase 2A) --------------------------------------------
+// ---- Decl extraction (Phase 2A) -------------------------------------------
 
 type DeclKind = Extract<NodeKind, "Class" | "Function" | "Method">
 
@@ -72,24 +69,22 @@ const SUPPORTED: ReadonlyArray<Language> = [
 	"python",
 ]
 
-// ---- Call extraction (Phase 2C) --------------------------------------------
+// ---- Call extraction (Phase 2C) -------------------------------------------
 //
 // Naive intra-file CALLS are collected during the same tree walk that finds
 // decls. For every Function/Method we recursively scan the body subtree
 // (including nested arrow/lambda/expression bodies) for call sites:
 //
-//   - TS/JS `call_expression` with `function` = `identifier`         → bare
+//   - TS/JS `call_expression` with `function` = `identifier`         -> bare
 //   - TS/JS `call_expression` with `function` = `member_expression`
-//                                where `object` is the literal `this` keyword
-//                                                                  → thisOrSelf
-//   - Python `call` with `function` = `identifier`                   → bare
+//     where `object` is the literal `this` keyword               -> thisOrSelf
+//   - Python `call` with `function` = `identifier`                   -> bare
 //   - Python `call` with `function` = `attribute`
-//                                where `object` is the identifier `self`
-//                                                                  → thisOrSelf
+//     where `object` is the identifier `self`                    -> thisOrSelf
 //
 // Other shapes (`super.foo`, `obj.foo`, `f[0]()`, `(g)()`, ...) are
-// intentionally ignored — naive mode never invents a target it cannot
-// resolve from the in-file decl table.
+// intentionally ignored: naive mode never invents a target it cannot resolve
+// from the in-file decl table.
 
 type CallResolution = "bare" | "thisOrSelf"
 
@@ -108,9 +103,6 @@ type CollectResult = {
 	decls: Decl[]
 	calls: CallSite[]
 }
-
-const withClass = (caller: CallerCtx, className: string | undefined): CallerCtx =>
-	className !== undefined ? { ...caller, callerClassName: className } : caller
 
 const collectCallsInTsBody = (
 	bodyNode: SyntaxNode,
@@ -205,11 +197,10 @@ const collectTypescript = (
 			const bodyNode = node.childForFieldName("body")
 			if (nameNode) {
 				const name = nameNode.text
-				const signature = `${name}${paramsNode?.text ?? "()"}`
 				decls.push({
 					kind: "Function",
 					name,
-					signature,
+					signature: `${name}${paramsNode?.text ?? "()"}`,
 					bodyText: source.slice(node.startIndex, node.endIndex),
 					startLine: node.startPosition.row + 1,
 					endLine: node.endPosition.row + 1,
@@ -223,8 +214,6 @@ const collectTypescript = (
 					)
 				}
 			}
-			// Phase 2A: do not descend into function bodies for further
-			// decl extraction. Nested decls land in later splits.
 			return
 		}
 		if (t === "class_declaration") {
@@ -255,11 +244,10 @@ const collectTypescript = (
 			const bodyNode = node.childForFieldName("body")
 			if (nameNode) {
 				const name = nameNode.text
-				const signature = `${name}${paramsNode?.text ?? "()"}`
 				decls.push({
 					kind: "Method",
 					name,
-					signature,
+					signature: `${name}${paramsNode?.text ?? "()"}`,
 					bodyText: source.slice(node.startIndex, node.endIndex),
 					startLine: node.startPosition.row + 1,
 					endLine: node.endPosition.row + 1,
@@ -267,20 +255,16 @@ const collectTypescript = (
 				})
 				if (bodyNode) {
 					calls.push(
-						...collectCallsInTsBody(
-							bodyNode,
-							withClass(
-								{ callerName: name, callerKind: "Method" },
-								parentClassName,
-							),
-						),
+						...collectCallsInTsBody(bodyNode, {
+							callerName: name,
+							callerKind: "Method",
+							callerClassName: parentClassName,
+						}),
 					)
 				}
 			}
 			return
 		}
-		// Descend through structural wrappers (program, export_statement,
-		// export_default_declaration, decorator wrappers, etc.).
 		for (let i = 0; i < node.namedChildCount; i++) {
 			const child = node.namedChild(i)
 			if (child) visit(child, parentClassName)
@@ -359,7 +343,6 @@ const collectPython = (
 			}
 			return
 		}
-		// Descend through module / decorated_definition / etc.
 		for (let i = 0; i < node.namedChildCount; i++) {
 			const child = node.namedChild(i)
 			if (child) visit(child, parentClassName)
@@ -376,7 +359,7 @@ const qualifiedNameFor = (path: string, decl: Decl): string => {
 	return `${path}::${decl.name}`
 }
 
-// ---- Import extraction (Phase 2B) ------------------------------------------
+// ---- Import extraction (Phase 2B) -----------------------------------------
 
 type ImportInfo = {
 	specifier: string
@@ -398,13 +381,6 @@ const stripStringLiteral = (text: string): string => {
 	return text
 }
 
-/**
- * Imports always live at the program (top) level in well-formed source, so a
- * shallow scan over the program's named children is correct and noticeably
- * cheaper than a full descent. Re-exports of the form
- * `export { x } from "./x.js"` are imports of `./x.js` for dependency-graph
- * purposes and are handled here too.
- */
 const collectTypescriptImports = (
 	root: SyntaxNode,
 	source: string,
@@ -438,16 +414,6 @@ const collectTypescriptImports = (
 	return imports
 }
 
-/**
- * Python imports come in two flavors:
- *
- *   - `import_statement` (`import x`, `import x, y as z`) emits one
- *     ImportInfo per imported module name.
- *   - `import_from_statement` (`from x import y, z`) emits exactly one
- *     ImportInfo for the source module x, regardless of how many names are
- *     pulled in. The granularity we care about for the dependency graph is
- *     the module, not the symbol.
- */
 const collectPythonImports = (
 	root: SyntaxNode,
 	source: string,
@@ -473,10 +439,7 @@ const collectPythonImports = (
 						specifier: moduleName,
 						startLine: child.startPosition.row + 1,
 						endLine: child.endPosition.row + 1,
-						bodyText: source.slice(
-							child.startIndex,
-							child.endIndex,
-						),
+						bodyText: source.slice(child.startIndex, child.endIndex),
 					})
 				}
 			}
@@ -496,15 +459,6 @@ const collectPythonImports = (
 	return imports
 }
 
-/**
- * Map a TS/JS import specifier extension to the on-disk source extension.
- *
- * ESM TS sources import siblings using `.js` suffixes per the spec, but the
- * actual files end in `.ts` / `.tsx` / `.mts` / `.cts`. We follow that
- * convention here so a `from "./greet.js"` import resolves to the
- * `src/greet.ts` File node id, matching what the parser will emit when that
- * file is parsed.
- */
 const TS_RESOLVE_EXT: Record<string, string> = {
 	".js": ".ts",
 	".jsx": ".tsx",
@@ -516,5 +470,337 @@ const TS_RESOLVE_EXT: Record<string, string> = {
 	".cts": ".cts",
 }
 
-/**
- * Resolve a `./`
+const resolveLocalTsImport = (
+	sourcePath: string,
+	specifier: string,
+): string | null => {
+	if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
+		return null
+	}
+	const lastSlash = sourcePath.lastIndexOf("/")
+	const dir = lastSlash >= 0 ? sourcePath.slice(0, lastSlash) : ""
+	const combined = dir ? `${dir}/${specifier}` : specifier
+	const parts: string[] = []
+	for (const segment of combined.split("/")) {
+		if (segment === "" || segment === ".") continue
+		if (segment === "..") {
+			if (parts.length === 0) return null
+			parts.pop()
+			continue
+		}
+		parts.push(segment)
+	}
+	if (parts.length === 0) return null
+	const resolved = parts.join("/")
+	const lastSegStart = resolved.lastIndexOf("/")
+	const dotIdx = resolved.lastIndexOf(".")
+	if (dotIdx <= lastSegStart) return null
+	const ext = resolved.slice(dotIdx)
+	const target = TS_RESOLVE_EXT[ext]
+	if (!target) return null
+	return `${resolved.slice(0, dotIdx)}${target}`
+}
+
+// ---- Public parser --------------------------------------------------------
+
+export class TreeSitterParser implements Parser {
+	readonly languages: ReadonlyArray<Language> = SUPPORTED
+
+	private readonly tsParser: TreeSitterInstance
+	private readonly pyParser: TreeSitterInstance
+
+	constructor() {
+		this.tsParser = new TreeSitter()
+		this.tsParser.setLanguage(TypeScriptGrammars.typescript)
+		this.pyParser = new TreeSitter()
+		this.pyParser.setLanguage(PythonGrammar)
+	}
+
+	async parseFile(args: {
+		repoId: string
+		indexRunId: string
+		batchId: string
+		path: string
+		language: Language
+		source: string
+	}): Promise<ParseResult> {
+		const nodes: GraphNode[] = []
+		const edges: GraphEdge[] = []
+
+		const totalLines = Math.max(1, args.source.split("\n").length)
+		const fileQName = args.path
+		const fileNodeId = stableId({
+			repoId: args.repoId,
+			relativePath: args.path,
+			symbolKind: "File",
+			qualifiedName: fileQName,
+		})
+		const fileContentHash = contentId({
+			normalizedSignature: normalizeSignature(""),
+			normalizedBody: normalizeBody(args.source),
+		})
+		nodes.push(
+			GraphNodeSchema.parse({
+				id: fileNodeId,
+				contentHash: fileContentHash,
+				repoId: args.repoId,
+				indexRunId: args.indexRunId,
+				batchId: args.batchId,
+				sourcePath: args.path,
+				schemaVersion: SCHEMA_VERSION,
+				path: args.path,
+				kind: "File",
+				language: args.language,
+				qualifiedName: fileQName,
+				signature: "",
+				evidence: { startLine: 1, endLine: totalLines },
+			}),
+		)
+
+		if (!SUPPORTED.includes(args.language)) {
+			return { nodes, edges }
+		}
+
+		const parser =
+			args.language === "python" ? this.pyParser : this.tsParser
+		const tree = parser.parse(args.source)
+
+		// Phase 2A decls + Phase 2C call collection happen in one walk.
+		const { decls, calls } =
+			args.language === "python"
+				? collectPython(tree.rootNode, args.source)
+				: collectTypescript(tree.rootNode, args.source)
+
+		for (const decl of decls) {
+			const qualifiedName = qualifiedNameFor(args.path, decl)
+			const id = stableId({
+				repoId: args.repoId,
+				relativePath: args.path,
+				symbolKind: decl.kind,
+				qualifiedName,
+			})
+			nodes.push(
+				GraphNodeSchema.parse({
+					id,
+					contentHash: contentId({
+						normalizedSignature: normalizeSignature(decl.signature),
+						normalizedBody: normalizeBody(decl.bodyText),
+					}),
+					repoId: args.repoId,
+					indexRunId: args.indexRunId,
+					batchId: args.batchId,
+					sourcePath: args.path,
+					schemaVersion: SCHEMA_VERSION,
+					path: args.path,
+					kind: decl.kind,
+					language: args.language,
+					qualifiedName,
+					signature: decl.signature,
+					evidence: {
+						startLine: decl.startLine,
+						endLine: decl.endLine,
+					},
+				}),
+			)
+			edges.push(
+				GraphEdgeSchema.parse({
+					src: fileNodeId,
+					dst: id,
+					type: "CONTAINS",
+					repoId: args.repoId,
+					indexRunId: args.indexRunId,
+					batchId: args.batchId,
+					sourcePath: args.path,
+					contentHash: edgeContentHash({
+						src: fileNodeId,
+						type: "CONTAINS",
+						dst: id,
+					}),
+					schemaVersion: SCHEMA_VERSION,
+				}),
+			)
+		}
+
+		// Phase 2B: imports + File->File resolution for TS/JS local relatives.
+		const importInfos =
+			args.language === "python"
+				? collectPythonImports(tree.rootNode, args.source)
+				: collectTypescriptImports(tree.rootNode, args.source)
+
+		const seenImportIds = new Set<string>()
+		for (const imp of importInfos) {
+			const qualifiedName = `${args.path}::import:${imp.specifier}`
+			const id = stableId({
+				repoId: args.repoId,
+				relativePath: args.path,
+				symbolKind: "Import",
+				qualifiedName,
+			})
+			if (!seenImportIds.has(id)) {
+				seenImportIds.add(id)
+				nodes.push(
+					GraphNodeSchema.parse({
+						id,
+						contentHash: contentId({
+							normalizedSignature: normalizeSignature(imp.specifier),
+							normalizedBody: normalizeBody(imp.bodyText),
+						}),
+						repoId: args.repoId,
+						indexRunId: args.indexRunId,
+						batchId: args.batchId,
+						sourcePath: args.path,
+						schemaVersion: SCHEMA_VERSION,
+						path: args.path,
+						kind: "Import",
+						language: args.language,
+						qualifiedName,
+						signature: imp.specifier,
+						evidence: {
+							startLine: imp.startLine,
+							endLine: imp.endLine,
+						},
+					}),
+				)
+				edges.push(
+					GraphEdgeSchema.parse({
+						src: fileNodeId,
+						dst: id,
+						type: "CONTAINS",
+						repoId: args.repoId,
+						indexRunId: args.indexRunId,
+						batchId: args.batchId,
+						sourcePath: args.path,
+						contentHash: edgeContentHash({
+							src: fileNodeId,
+							type: "CONTAINS",
+							dst: id,
+						}),
+						schemaVersion: SCHEMA_VERSION,
+					}),
+				)
+				edges.push(
+					GraphEdgeSchema.parse({
+						src: fileNodeId,
+						dst: id,
+						type: "IMPORTS",
+						repoId: args.repoId,
+						indexRunId: args.indexRunId,
+						batchId: args.batchId,
+						sourcePath: args.path,
+						contentHash: edgeContentHash({
+							src: fileNodeId,
+							type: "IMPORTS",
+							dst: id,
+						}),
+						schemaVersion: SCHEMA_VERSION,
+					}),
+				)
+			}
+
+			if (args.language !== "python") {
+				const resolved = resolveLocalTsImport(args.path, imp.specifier)
+				if (resolved) {
+					const targetFileId = stableId({
+						repoId: args.repoId,
+						relativePath: resolved,
+						symbolKind: "File",
+						qualifiedName: resolved,
+					})
+					edges.push(
+						GraphEdgeSchema.parse({
+							src: fileNodeId,
+							dst: targetFileId,
+							type: "IMPORTS",
+							repoId: args.repoId,
+							indexRunId: args.indexRunId,
+							batchId: args.batchId,
+							sourcePath: args.path,
+							contentHash: edgeContentHash({
+								src: fileNodeId,
+								type: "IMPORTS",
+								dst: targetFileId,
+							}),
+							schemaVersion: SCHEMA_VERSION,
+						}),
+					)
+				}
+			}
+		}
+
+		// Phase 2C: resolve collected call sites against the in-file decl table
+		// and emit deduped CALLS edges. Self-recursion is skipped so a function
+		// can never CALL itself.
+		const topLevelFunctionsByName = new Map<string, GraphNode>()
+		const methodsByClassName = new Map<string, Map<string, GraphNode>>()
+		for (const node of nodes) {
+			if (node.kind === "Function") {
+				const tail = node.qualifiedName.split("::").pop() ?? ""
+				topLevelFunctionsByName.set(tail, node)
+			} else if (node.kind === "Method") {
+				const tail = node.qualifiedName.split("::").pop() ?? ""
+				const dotIdx = tail.indexOf(".")
+				if (dotIdx >= 0) {
+					const className = tail.slice(0, dotIdx)
+					const methodName = tail.slice(dotIdx + 1)
+					let m = methodsByClassName.get(className)
+					if (!m) {
+						m = new Map()
+						methodsByClassName.set(className, m)
+					}
+					m.set(methodName, node)
+				}
+			}
+		}
+
+		const emittedCallEdges = new Set<string>()
+		for (const call of calls) {
+			let callerNode: GraphNode | undefined
+			if (call.callerKind === "Function") {
+				callerNode = topLevelFunctionsByName.get(call.callerName)
+			} else if (call.callerClassName) {
+				callerNode = methodsByClassName
+					.get(call.callerClassName)
+					?.get(call.callerName)
+			}
+			if (!callerNode) continue
+
+			let calleeNode: GraphNode | undefined
+			if (call.resolution === "bare") {
+				calleeNode = topLevelFunctionsByName.get(call.calleeName)
+			} else if (
+				call.resolution === "thisOrSelf" &&
+				call.callerClassName
+			) {
+				calleeNode = methodsByClassName
+					.get(call.callerClassName)
+					?.get(call.calleeName)
+			}
+			if (!calleeNode) continue
+			if (calleeNode.id === callerNode.id) continue
+
+			const key = `${callerNode.id}|${calleeNode.id}`
+			if (emittedCallEdges.has(key)) continue
+			emittedCallEdges.add(key)
+
+			edges.push(
+				GraphEdgeSchema.parse({
+					src: callerNode.id,
+					dst: calleeNode.id,
+					type: "CALLS",
+					repoId: args.repoId,
+					indexRunId: args.indexRunId,
+					batchId: args.batchId,
+					sourcePath: args.path,
+					contentHash: edgeContentHash({
+						src: callerNode.id,
+						type: "CALLS",
+						dst: calleeNode.id,
+					}),
+					schemaVersion: SCHEMA_VERSION,
+				}),
+			)
+		}
+
+		return { nodes, edges }
+	}
+}
