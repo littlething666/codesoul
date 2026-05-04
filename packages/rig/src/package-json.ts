@@ -79,7 +79,8 @@ const extractWorkspacePatterns = (
 	const ws = pkg.workspaces
 	if (!ws) return []
 	if (Array.isArray(ws)) return [...ws]
-	return [...(ws.packages ?? [])]
+	if (typeof ws !== "object" || ws === null) return []
+	return [...((ws as { packages?: ReadonlyArray<string> }).packages ?? [])]
 }
 
 /**
