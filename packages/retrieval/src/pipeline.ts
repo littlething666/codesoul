@@ -1,15 +1,33 @@
-import type { Candidate, ContextBundle, RankedCandidate } from "@codesoul/core"
-import { CONTEXT_BUDGET_TOKENS, RETRIEVAL_LIMITS } from "@codesoul/core"
+import type {
+	Candidate,
+	ContextBundle,
+	RankedCandidate,
+	SourceProvider,
+} from "@codesoul/core"
+import {
+	CONTEXT_BUDGET_TOKENS,
+	MockSourceProvider,
+	RETRIEVAL_LIMITS,
+} from "@codesoul/core"
 import type { Embedder } from "@codesoul/embedder"
 import type { GraphStore } from "@codesoul/graph-store"
 import type { Reranker } from "@codesoul/reranker"
-import type { VectorStore, VectorSearchFilter } from "@codesoul/vector-store"
+import type { VectorSearchFilter, VectorStore } from "@codesoul/vector-store"
 
 export type RetrievalDeps = {
 	graph: GraphStore
 	vectors: VectorStore
 	embedder: Embedder
 	reranker: Reranker
+	/**
+	 * Source-text provider used to populate `ContextBundle.snippets[].text`.
+	 *
+	 * Defaults to `MockSourceProvider`, which emits a placeholder line so
+	 * tests can introspect snippet shape without touching the filesystem.
+	 * Wire a `FileSystemSourceProvider` (or a future remote provider) when
+	 * real source content is required.
+	 */
+	sourceProvider?: SourceProvider
 }
 
 export type RetrievalInput = {
@@ -28,6 +46,10 @@ export type RetrievalInput = {
  *
  * The query is embedded with `kind: "query"`; query vectors never land in
  * the vector store because `VectorRow` is node-shaped only.
+ *
+ * Snippet text is read through the injected `SourceProvider` so retrieval
+ * is decoupled from filesystem assumptions: the same pipeline serves
+ * filesystem-backed `codesoul query` runs and mock-only unit tests.
  */
 export const retrieve = async (
 	deps: RetrievalDeps,
@@ -35,6 +57,7 @@ export const retrieve = async (
 ): Promise<ContextBundle> => {
 	const { query } = input
 	const limit = input.limit ?? RETRIEVAL_LIMITS.finalSnippets
+	const sourceProvider = deps.sourceProvider ?? new MockSourceProvider()
 
 	// 1. ParseQuery (skeleton): naive identifier extraction.
 	const identifiers = query
@@ -110,7 +133,11 @@ export const retrieve = async (
 
 	// 5. MergeCandidates (dedupe; prefer the higher-score source).
 	const merged = new Map<string, Candidate>()
-	for (const c of [...exactCandidates, ...semanticCandidates, ...graphCandidates]) {
+	for (const c of [
+		...exactCandidates,
+		...semanticCandidates,
+		...graphCandidates,
+	]) {
 		const existing = merged.get(c.nodeId)
 		if (!existing || c.score > existing.score) merged.set(c.nodeId, c)
 	}
@@ -120,21 +147,31 @@ export const retrieve = async (
 	)
 
 	// 6. Rerank
-	const ranked: RankedCandidate[] = await deps.reranker.rerank(query, candidates)
+	const ranked: RankedCandidate[] = await deps.reranker.rerank(
+		query,
+		candidates,
+	)
 	ranked.sort((a, b) => b.rerankScore - a.rerankScore)
 
 	// 7. AssembleContext
 	const finalCandidates = ranked.slice(0, limit)
-	return {
-		query,
-		snippets: finalCandidates.map((c) => ({
+	const snippets = await Promise.all(
+		finalCandidates.map(async (c) => ({
 			nodeId: c.nodeId,
 			path: c.evidencePath,
 			lines: c.evidenceLines,
-			text: "",
+			text: await sourceProvider.readRange(
+				c.evidencePath,
+				c.evidenceLines,
+			),
 		})),
+	)
+	return {
+		query,
+		snippets,
 		citations: finalCandidates.map(
-			(c) => `${c.evidencePath}:${c.evidenceLines[0]}-${c.evidenceLines[1]}`,
+			(c) =>
+				`${c.evidencePath}:${c.evidenceLines[0]}-${c.evidenceLines[1]}`,
 		),
 		tokenBudget: {
 			total: CONTEXT_BUDGET_TOKENS.total,

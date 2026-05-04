@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import type {
 	Candidate,
 	EmbedInput,
@@ -6,9 +9,10 @@ import type {
 	GraphEdge,
 	GraphNode,
 	RankedCandidate,
+	SourceProvider,
 	VectorRow,
 } from "@codesoul/core"
-import { EMBEDDING_DIM } from "@codesoul/core"
+import { EMBEDDING_DIM, FileSystemSourceProvider } from "@codesoul/core"
 import { MockEmbedder } from "@codesoul/embedder/mock"
 import { MockGraphStore } from "@codesoul/graph-store/mock"
 import { MockReranker } from "@codesoul/reranker/mock"
@@ -27,7 +31,15 @@ const meta = {
 	schemaVersion: 1 as const,
 }
 
-const node = (id: string, qname: string, path = "src/x.ts"): GraphNode => ({
+const node = (
+	id: string,
+	qname: string,
+	path = "src/x.ts",
+	evidence: { startLine: number; endLine: number } = {
+		startLine: 1,
+		endLine: 1,
+	},
+): GraphNode => ({
 	...meta,
 	id,
 	path,
@@ -35,7 +47,7 @@ const node = (id: string, qname: string, path = "src/x.ts"): GraphNode => ({
 	language: "typescript",
 	qualifiedName: qname,
 	signature: "",
-	evidence: { startLine: 1, endLine: 1 },
+	evidence,
 })
 
 const edge = (src: string, dst: string): GraphEdge => ({
@@ -76,19 +88,35 @@ class RecordingReranker extends MockReranker {
 	}
 }
 
+class RecordingSourceProvider implements SourceProvider {
+	calls: Array<{ path: string; lines: [number, number] }> = []
+	async readRange(
+		path: string,
+		lines: [number, number],
+	): Promise<string> {
+		this.calls.push({ path, lines })
+		return `<src ${path}:${lines[0]}-${lines[1]}>`
+	}
+}
+
 describe("retrieve()", () => {
 	it("embeds the query with kind=query and a queryId", async () => {
 		const graph = new MockGraphStore()
 		const vectors = new MockVectorStore()
 		const embedder = new RecordingEmbedder()
 		const reranker = new MockReranker()
-		await retrieve({ graph, vectors, embedder, reranker }, { query: "greet" })
+		await retrieve(
+			{ graph, vectors, embedder, reranker },
+			{ query: "greet" },
+		)
 		expect(embedder.inputs[0]).toMatchObject({
 			kind: "query",
 			queryId: "default",
 			text: "greet",
 		})
-		expect((embedder.inputs[0] as { nodeId?: string }).nodeId).toBeUndefined()
+		expect(
+			(embedder.inputs[0] as { nodeId?: string }).nodeId,
+		).toBeUndefined()
 	})
 
 	it("returns exact lookup hits as snippets", async () => {
@@ -127,7 +155,9 @@ describe("retrieve()", () => {
 				text: "unrelated",
 			},
 		])
-		await vectors.upsert([row(foo.id, r?.vector ?? new Array(EMBEDDING_DIM).fill(0))])
+		await vectors.upsert([
+			row(foo.id, r?.vector ?? new Array(EMBEDDING_DIM).fill(0)),
+		])
 		const bundle = await retrieve(
 			{ graph, vectors, embedder, reranker },
 			{ query: "unrelated" },
@@ -185,5 +215,79 @@ describe("retrieve()", () => {
 			expect(s.lines).toHaveLength(2)
 		}
 		expect(bundle.citations.length).toBe(bundle.snippets.length)
+	})
+
+	it("defaults to MockSourceProvider so snippets carry placeholder text when none is wired", async () => {
+		const graph = new MockGraphStore()
+		const vectors = new MockVectorStore()
+		const embedder = new MockEmbedder()
+		const reranker = new MockReranker()
+		const a = node(SYM("a"), "src/a.ts::greet", "src/a.ts", {
+			startLine: 2,
+			endLine: 4,
+		})
+		await graph.upsertNodes([a])
+		const bundle = await retrieve(
+			{ graph, vectors, embedder, reranker },
+			{ query: "greet" },
+		)
+		const greetSnippet = bundle.snippets.find((s) => s.nodeId === a.id)
+		expect(greetSnippet?.text).toContain("<mock source: src/a.ts:2-4>")
+	})
+
+	it("calls the injected SourceProvider with the snippet's path and lines", async () => {
+		const graph = new MockGraphStore()
+		const vectors = new MockVectorStore()
+		const embedder = new MockEmbedder()
+		const reranker = new MockReranker()
+		const sourceProvider = new RecordingSourceProvider()
+		const a = node(SYM("a"), "src/a.ts::greet", "src/a.ts", {
+			startLine: 5,
+			endLine: 9,
+		})
+		await graph.upsertNodes([a])
+		const bundle = await retrieve(
+			{ graph, vectors, embedder, reranker, sourceProvider },
+			{ query: "greet" },
+		)
+		const greetSnippet = bundle.snippets.find((s) => s.nodeId === a.id)
+		expect(greetSnippet?.text).toBe("<src src/a.ts:5-9>")
+		expect(
+			sourceProvider.calls.some(
+				(c) =>
+					c.path === "src/a.ts" &&
+					c.lines[0] === 5 &&
+					c.lines[1] === 9,
+			),
+		).toBe(true)
+	})
+
+	it("populates snippet text from a real on-disk file when given a FileSystemSourceProvider", async () => {
+		const root = await mkdtemp(join(tmpdir(), "codesoul-pipeline-"))
+		try {
+			const sample =
+				"export function greet(name: string): string {\n\treturn name\n}\n"
+			await writeFile(join(root, "src.ts"), sample, "utf8")
+			const graph = new MockGraphStore()
+			const vectors = new MockVectorStore()
+			const embedder = new MockEmbedder()
+			const reranker = new MockReranker()
+			const sourceProvider = new FileSystemSourceProvider(root)
+			const a = node(SYM("a"), "src.ts::greet", "src.ts", {
+				startLine: 1,
+				endLine: 3,
+			})
+			await graph.upsertNodes([a])
+			const bundle = await retrieve(
+				{ graph, vectors, embedder, reranker, sourceProvider },
+				{ query: "greet" },
+			)
+			const snippet = bundle.snippets.find((s) => s.nodeId === a.id)
+			expect(snippet?.text).toBe(
+				"export function greet(name: string): string {\n\treturn name\n}",
+			)
+		} finally {
+			await rm(root, { recursive: true, force: true })
+		}
 	})
 })
