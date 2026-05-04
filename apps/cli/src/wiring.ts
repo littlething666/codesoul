@@ -14,6 +14,7 @@ import { MockEmbedder } from "@codesoul/embedder/mock"
 import {
 	FallbackEmbedder,
 	HttpEmbedder,
+	LatencyLoggingEmbedder,
 } from "@codesoul/embedder-http"
 import { MockGraphStore } from "@codesoul/graph-store/mock"
 import type { ManifestStore } from "@codesoul/manifest-store"
@@ -26,6 +27,7 @@ import { MockReranker } from "@codesoul/reranker/mock"
 import {
 	FallbackReranker,
 	HttpReranker,
+	LatencyLoggingReranker,
 } from "@codesoul/reranker-http"
 import type { RigExtractor } from "@codesoul/rig"
 import { RigDispatcher } from "@codesoul/rig/dispatcher"
@@ -108,44 +110,70 @@ const buildSourceProvider = (env: WirePhase0Env): SourceProvider => {
 	return new MockSourceProvider()
 }
 
+/**
+ * Phase 5c residual: opt-in latency logging.
+ *
+ * Wrapping the FINAL embedder/reranker (after fallback, if any) means
+ * the timing record captures the user-visible call duration, including
+ * any fallback retry. Wrapping the primary instead would silently drop
+ * the fallback's call from the metrics, which defeats the purpose.
+ *
+ * Default OFF so existing tests that assert on `instanceof HttpEmbedder`
+ * stay byte-identical without env-var orchestration. Truthy values
+ * accepted: "1", "true", "yes" (case-insensitive).
+ */
+const isLatencyLoggingEnabled = (env: WirePhase0Env): boolean => {
+	const raw = env.CODESOUL_LOG_LATENCY
+	if (!raw) return false
+	const lower = raw.toLowerCase()
+	return lower === "1" || lower === "true" || lower === "yes"
+}
+
 const buildEmbedder = (
 	mode: IndexConfig["embedder"],
 	env: WirePhase0Env,
 	logger: Logger,
 ): Embedder => {
 	const mock = new MockEmbedder()
-	if (mode === "mock") return mock
-
-	const url = env.CODESOUL_EMBEDDER_URL
-	const modelId = env.CODESOUL_EMBEDDER_MODEL
-	const modelRevision = env.CODESOUL_EMBEDDER_REVISION
-	if (!url || !modelId || !modelRevision) {
-		throw new AdapterUnavailableError(
-			"embedder: 'http' requires CODESOUL_EMBEDDER_URL, CODESOUL_EMBEDDER_MODEL, and CODESOUL_EMBEDDER_REVISION",
-		)
-	}
-	const headers: Record<string, string> = {}
-	if (env.CODESOUL_EMBEDDER_AUTH) {
-		headers.authorization = env.CODESOUL_EMBEDDER_AUTH
-	}
-	const http = new HttpEmbedder({
-		url,
-		modelId,
-		modelRevision,
-		...(Object.keys(headers).length > 0 ? { headers } : {}),
-	})
-	if (env.CODESOUL_EMBEDDER_FALLBACK === "mock") {
-		return new FallbackEmbedder({
-			primary: http,
-			fallback: mock,
-			onFallback: (err) =>
-				logger.warn(
-					{ err: err.message, modelId, modelRevision },
-					"embedder fell back to mock",
-				),
+	let final: Embedder
+	if (mode === "mock") {
+		final = mock
+	} else {
+		const url = env.CODESOUL_EMBEDDER_URL
+		const modelId = env.CODESOUL_EMBEDDER_MODEL
+		const modelRevision = env.CODESOUL_EMBEDDER_REVISION
+		if (!url || !modelId || !modelRevision) {
+			throw new AdapterUnavailableError(
+				"embedder: 'http' requires CODESOUL_EMBEDDER_URL, CODESOUL_EMBEDDER_MODEL, and CODESOUL_EMBEDDER_REVISION",
+			)
+		}
+		const headers: Record<string, string> = {}
+		if (env.CODESOUL_EMBEDDER_AUTH) {
+			headers.authorization = env.CODESOUL_EMBEDDER_AUTH
+		}
+		const http = new HttpEmbedder({
+			url,
+			modelId,
+			modelRevision,
+			...(Object.keys(headers).length > 0 ? { headers } : {}),
 		})
+		if (env.CODESOUL_EMBEDDER_FALLBACK === "mock") {
+			final = new FallbackEmbedder({
+				primary: http,
+				fallback: mock,
+				onFallback: (err) =>
+					logger.warn(
+						{ err: err.message, modelId, modelRevision },
+						"embedder fell back to mock",
+					),
+			})
+		} else {
+			final = http
+		}
 	}
-	return http
+	return isLatencyLoggingEnabled(env)
+		? new LatencyLoggingEmbedder({ inner: final, logger })
+		: final
 }
 
 const buildReranker = (
@@ -155,39 +183,46 @@ const buildReranker = (
 	logger: Logger,
 ): Reranker => {
 	const mock = new MockReranker()
-	if (mode === "mock") return mock
-
-	const url = env.CODESOUL_RERANKER_URL
-	const modelId = env.CODESOUL_RERANKER_MODEL
-	const modelRevision = env.CODESOUL_RERANKER_REVISION
-	if (!url || !modelId || !modelRevision) {
-		throw new AdapterUnavailableError(
-			"reranker: 'http' requires CODESOUL_RERANKER_URL, CODESOUL_RERANKER_MODEL, and CODESOUL_RERANKER_REVISION",
-		)
-	}
-	const headers: Record<string, string> = {}
-	if (env.CODESOUL_RERANKER_AUTH) {
-		headers.authorization = env.CODESOUL_RERANKER_AUTH
-	}
-	const http = new HttpReranker({
-		url,
-		modelId,
-		modelRevision,
-		sourceProvider,
-		...(Object.keys(headers).length > 0 ? { headers } : {}),
-	})
-	if (env.CODESOUL_RERANKER_FALLBACK === "mock") {
-		return new FallbackReranker({
-			primary: http,
-			fallback: mock,
-			onFallback: (err) =>
-				logger.warn(
-					{ err: err.message, modelId, modelRevision },
-					"reranker fell back to mock",
-				),
+	let final: Reranker
+	if (mode === "mock") {
+		final = mock
+	} else {
+		const url = env.CODESOUL_RERANKER_URL
+		const modelId = env.CODESOUL_RERANKER_MODEL
+		const modelRevision = env.CODESOUL_RERANKER_REVISION
+		if (!url || !modelId || !modelRevision) {
+			throw new AdapterUnavailableError(
+				"reranker: 'http' requires CODESOUL_RERANKER_URL, CODESOUL_RERANKER_MODEL, and CODESOUL_RERANKER_REVISION",
+			)
+		}
+		const headers: Record<string, string> = {}
+		if (env.CODESOUL_RERANKER_AUTH) {
+			headers.authorization = env.CODESOUL_RERANKER_AUTH
+		}
+		const http = new HttpReranker({
+			url,
+			modelId,
+			modelRevision,
+			sourceProvider,
+			...(Object.keys(headers).length > 0 ? { headers } : {}),
 		})
+		if (env.CODESOUL_RERANKER_FALLBACK === "mock") {
+			final = new FallbackReranker({
+				primary: http,
+				fallback: mock,
+				onFallback: (err) =>
+					logger.warn(
+						{ err: err.message, modelId, modelRevision },
+						"reranker fell back to mock",
+					),
+			})
+		} else {
+			final = http
+		}
 	}
-	return http
+	return isLatencyLoggingEnabled(env)
+		? new LatencyLoggingReranker({ inner: final, logger })
+		: final
 }
 
 export const wirePhase0 = (

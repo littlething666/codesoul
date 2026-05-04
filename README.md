@@ -31,9 +31,9 @@ packages/
   graph-store-neo4j/     # Neo4j 5.26-LTS adapter (Phase 3)
   vector-store/          # VectorStore interface + MockVectorStore
   embedder/              # Embedder interface + MockEmbedder
-  embedder-http/         # HttpEmbedder + FallbackEmbedder (Phase 5)
+  embedder-http/         # HttpEmbedder + FallbackEmbedder + LatencyLoggingEmbedder (Phase 5)
   reranker/              # Reranker interface + MockReranker
-  reranker-http/         # HttpReranker + FallbackReranker (Phase 5)
+  reranker-http/         # HttpReranker + FallbackReranker + LatencyLoggingReranker (Phase 5)
   summarizer/            # Summarizer interface + MockSummarizer
   retrieval/             # Hybrid retrieval skeleton
   indexer/               # Index pipeline state machine + FixtureIndexer
@@ -77,6 +77,11 @@ export CODESOUL_RERANKER_REVISION=0
 export CODESOUL_EMBEDDER_FALLBACK=mock
 export CODESOUL_RERANKER_FALLBACK=mock
 
+# Optional: emit a pino-shaped record on every embed/rerank call with
+# { adapter, modelId, modelRevision, count, durationMs }. Truthy:
+# "1", "true", "yes" (case-insensitive). Off by default.
+export CODESOUL_LOG_LATENCY=1
+
 # 3. Use --embedder/--reranker http on either command
 pnpm --filter @codesoul/cli exec node dist/bin.js \
   query "greet" --repo ./fixtures/tiny-ts-lib \
@@ -84,5 +89,7 @@ pnpm --filter @codesoul/cli exec node dist/bin.js \
 ```
 
 Identity is verified at the response boundary: a server replying with vectors from a different `modelId@modelRevision` raises `EmbeddingCompatibilityError` (embedder) or `AdapterUnavailableError` (reranker) instead of silently corrupting search results.
+
+When `CODESOUL_LOG_LATENCY` is on, the **outermost** adapter (after any `FallbackEmbedder` / `FallbackReranker`) is wrapped with `LatencyLoggingEmbedder` / `LatencyLoggingReranker`, so the recorded `durationMs` includes any fallback retry — i.e. it reflects the user-visible call duration, not just the primary's.
 
 Real Qwen3-Embedding / Qwen3-Reranker backends are gated behind the `[models]` extra in `workers/model-server/pyproject.toml` and will land in a follow-up.

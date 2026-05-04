@@ -8,11 +8,13 @@ import { MockEmbedder } from "@codesoul/embedder/mock"
 import {
 	FallbackEmbedder,
 	HttpEmbedder,
+	LatencyLoggingEmbedder,
 } from "@codesoul/embedder-http"
 import { MockReranker } from "@codesoul/reranker/mock"
 import {
 	FallbackReranker,
 	HttpReranker,
+	LatencyLoggingReranker,
 } from "@codesoul/reranker-http"
 import { wirePhase0 } from "../wiring.js"
 
@@ -169,5 +171,96 @@ describe("wirePhase0 (http modes)", () => {
 		const deps = wirePhase0({})
 		expect(deps.embedder).toBeInstanceOf(MockEmbedder)
 		expect(deps.reranker).toBeInstanceOf(MockReranker)
+	})
+})
+
+describe("wirePhase0 (latency logging, Phase 5c)", () => {
+	it("does NOT wrap the embedder when CODESOUL_LOG_LATENCY is unset", () => {
+		const deps = wirePhase0({}, { env: {}, logger: silentLogger })
+		expect(deps.embedder).not.toBeInstanceOf(LatencyLoggingEmbedder)
+		expect(deps.embedder).toBeInstanceOf(MockEmbedder)
+	})
+
+	it("does NOT wrap the reranker when CODESOUL_LOG_LATENCY is unset", () => {
+		const deps = wirePhase0({}, { env: {}, logger: silentLogger })
+		expect(deps.reranker).not.toBeInstanceOf(LatencyLoggingReranker)
+		expect(deps.reranker).toBeInstanceOf(MockReranker)
+	})
+
+	it("wraps the mock embedder/reranker when CODESOUL_LOG_LATENCY=1", () => {
+		const deps = wirePhase0(
+			{},
+			{
+				env: { CODESOUL_LOG_LATENCY: "1" },
+				logger: silentLogger,
+			},
+		)
+		expect(deps.embedder).toBeInstanceOf(LatencyLoggingEmbedder)
+		expect(deps.reranker).toBeInstanceOf(LatencyLoggingReranker)
+	})
+
+	it("accepts 'true' and 'yes' (case-insensitive) as truthy values", () => {
+		for (const value of ["true", "TRUE", "yes", "Yes"]) {
+			const deps = wirePhase0(
+				{},
+				{
+					env: { CODESOUL_LOG_LATENCY: value },
+					logger: silentLogger,
+				},
+			)
+			expect(deps.embedder).toBeInstanceOf(LatencyLoggingEmbedder)
+		}
+	})
+
+	it("ignores unrecognized values like '0', 'false', or empty string", () => {
+		for (const value of ["0", "false", "no", ""]) {
+			const deps = wirePhase0(
+				{},
+				{
+					env: { CODESOUL_LOG_LATENCY: value },
+					logger: silentLogger,
+				},
+			)
+			expect(deps.embedder).not.toBeInstanceOf(LatencyLoggingEmbedder)
+		}
+	})
+
+	it("wraps the http embedder (after FallbackEmbedder) when CODESOUL_LOG_LATENCY=1 and embedder=http", () => {
+		const deps = wirePhase0(
+			{ embedder: "http" },
+			{
+				env: {
+					CODESOUL_EMBEDDER_URL: URL_E,
+					CODESOUL_EMBEDDER_MODEL: MODEL_E,
+					CODESOUL_EMBEDDER_REVISION: REV_E,
+					CODESOUL_EMBEDDER_FALLBACK: "mock",
+					CODESOUL_LOG_LATENCY: "1",
+				},
+				logger: silentLogger,
+			},
+		)
+		expect(deps.embedder).toBeInstanceOf(LatencyLoggingEmbedder)
+		// Identity still surfaces all the way out from the http primary,
+		// even through both the FallbackEmbedder and LatencyLoggingEmbedder layers.
+		expect(deps.embedder.modelId).toBe(MODEL_E)
+		expect(deps.embedder.modelRevision).toBe(REV_E)
+	})
+
+	it("wraps the http reranker when CODESOUL_LOG_LATENCY=1 and reranker=http", () => {
+		const deps = wirePhase0(
+			{ reranker: "http" },
+			{
+				env: {
+					CODESOUL_RERANKER_URL: URL_R,
+					CODESOUL_RERANKER_MODEL: MODEL_R,
+					CODESOUL_RERANKER_REVISION: REV_R,
+					CODESOUL_LOG_LATENCY: "1",
+				},
+				logger: silentLogger,
+			},
+		)
+		expect(deps.reranker).toBeInstanceOf(LatencyLoggingReranker)
+		expect(deps.reranker.modelId).toBe(MODEL_R)
+		expect(deps.reranker.modelRevision).toBe(REV_R)
 	})
 })

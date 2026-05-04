@@ -6,3 +6,8 @@ export type {
 } from "./http-embedder.js"
 export { FallbackEmbedder } from "./fallback-embedder.js"
 export type { FallbackEmbedderOptions } from "./fallback-embedder.js"
+export { LatencyLoggingEmbedder } from "./latency-logging-embedder.js"
+export type {
+	LatencyLogger,
+	LatencyLoggingEmbedderOptions,
+} from "./latency-logging-embedder.js"
