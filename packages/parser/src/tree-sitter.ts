@@ -11,6 +11,13 @@ import {
 	stableId,
 } from "@codesoul/core"
 import type { Parser, ParseResult } from "./parser.js"
+import {
+	DEFAULT_BLOCK_LINE_THRESHOLD,
+	DEFAULT_BLOCK_TOKEN_THRESHOLD,
+	extractBlocks,
+	type BlockExtractionOptions,
+	type BlockSyntaxNode,
+} from "./blocks.js"
 
 // `tree-sitter` and its grammar packages ship as CommonJS native modules.
 // `createRequire` keeps this file working under `"type": "module"` regardless
@@ -51,7 +58,7 @@ const PythonGrammar = require("tree-sitter-python") as unknown
 
 // ---- Decl extraction (Phase 2A) -------------------------------------------
 
-type DeclKind = Extract<NodeKind, "Class" | "Function" | "Method">
+type DeclKind = Extract<NodeKind, "Function" | "Method" | "Class">
 
 type Decl = {
 	kind: DeclKind
@@ -61,6 +68,12 @@ type Decl = {
 	startLine: number
 	endLine: number
 	parentClassName?: string
+	/**
+	 * Tree-sitter body node, populated for Function and Method only.
+	 * Used by Phase 7 Block extraction; classes are intentionally skipped
+	 * because their bodies expand into Methods, not Blocks.
+	 */
+	bodyNode?: SyntaxNode
 }
 
 const SUPPORTED: ReadonlyArray<Language> = [
@@ -75,12 +88,12 @@ const SUPPORTED: ReadonlyArray<Language> = [
 // decls. For every Function/Method we recursively scan the body subtree
 // (including nested arrow/lambda/expression bodies) for call sites:
 //
-//   - TS/JS `call_expression` with `function` = `identifier`         -> bare
+//   - TS/JS `call_expression` with `function` = `identifier` -> bare
 //   - TS/JS `call_expression` with `function` = `member_expression`
-//     where `object` is the literal `this` keyword               -> thisOrSelf
-//   - Python `call` with `function` = `identifier`                   -> bare
+//     where `object` is the literal `this` keyword -> thisOrSelf
+//   - Python `call` with `function` = `identifier` -> bare
 //   - Python `call` with `function` = `attribute`
-//     where `object` is the identifier `self`                    -> thisOrSelf
+//     where `object` is the identifier `self` -> thisOrSelf
 //
 // Other shapes (`super.foo`, `obj.foo`, `f[0]()`, `(g)()`, ...) are
 // intentionally ignored: naive mode never invents a target it cannot resolve
@@ -204,6 +217,7 @@ const collectTypescript = (
 					bodyText: source.slice(node.startIndex, node.endIndex),
 					startLine: node.startPosition.row + 1,
 					endLine: node.endPosition.row + 1,
+					bodyNode: bodyNode ?? undefined,
 				})
 				if (bodyNode) {
 					calls.push(
@@ -252,6 +266,7 @@ const collectTypescript = (
 					startLine: node.startPosition.row + 1,
 					endLine: node.endPosition.row + 1,
 					parentClassName,
+					bodyNode: bodyNode ?? undefined,
 				})
 				if (bodyNode) {
 					calls.push(
@@ -298,6 +313,7 @@ const collectPython = (
 							startLine: node.startPosition.row + 1,
 							endLine: node.endPosition.row + 1,
 							parentClassName,
+							bodyNode: bodyNode ?? undefined,
 						}
 					: {
 							kind: "Function",
@@ -306,6 +322,7 @@ const collectPython = (
 							bodyText: source.slice(node.startIndex, node.endIndex),
 							startLine: node.startPosition.row + 1,
 							endLine: node.endPosition.row + 1,
+							bodyNode: bodyNode ?? undefined,
 						}
 				decls.push(decl)
 				if (bodyNode) {
@@ -503,17 +520,34 @@ const resolveLocalTsImport = (
 
 // ---- Public parser --------------------------------------------------------
 
+export type TreeSitterParserOptions = {
+	/**
+	 * Phase 7 Block extraction tuning. Defaults: tokenThreshold=512,
+	 * lineThreshold=60. See packages/parser/src/blocks.ts.
+	 */
+	blockExtraction?: BlockExtractionOptions
+}
+
 export class TreeSitterParser implements Parser {
 	readonly languages: ReadonlyArray<Language> = SUPPORTED
 
 	private readonly tsParser: TreeSitterInstance
 	private readonly pyParser: TreeSitterInstance
+	private readonly blockExtraction: BlockExtractionOptions
 
-	constructor() {
+	constructor(options: TreeSitterParserOptions = {}) {
 		this.tsParser = new TreeSitter()
 		this.tsParser.setLanguage(TypeScriptGrammars.typescript)
 		this.pyParser = new TreeSitter()
 		this.pyParser.setLanguage(PythonGrammar)
+		this.blockExtraction = {
+			tokenThreshold:
+				options.blockExtraction?.tokenThreshold ??
+				DEFAULT_BLOCK_TOKEN_THRESHOLD,
+			lineThreshold:
+				options.blockExtraction?.lineThreshold ??
+				DEFAULT_BLOCK_LINE_THRESHOLD,
+		}
 	}
 
 	async parseFile(args: {
@@ -619,6 +653,32 @@ export class TreeSitterParser implements Parser {
 					schemaVersion: SCHEMA_VERSION,
 				}),
 			)
+
+			// Phase 7: Block extraction for Function and Method only.
+			// Class decls have no bodyNode — their bodies expand into
+			// Methods which each get block extraction independently.
+			if (
+				(decl.kind === "Function" || decl.kind === "Method") &&
+				decl.bodyNode
+			) {
+				const lineSpan = decl.endLine - decl.startLine + 1
+				const blockResult = extractBlocks({
+					repoId: args.repoId,
+					indexRunId: args.indexRunId,
+					batchId: args.batchId,
+					path: args.path,
+					language: args.language,
+					parentNodeId: id,
+					parentQualifiedName: qualifiedName,
+					bodyNode: decl.bodyNode as unknown as BlockSyntaxNode,
+					source: args.source,
+					parentBodyText: decl.bodyText,
+					parentLineSpan: lineSpan,
+					options: this.blockExtraction,
+				})
+				for (const n of blockResult.nodes) nodes.push(n)
+				for (const e of blockResult.edges) edges.push(e)
+			}
 		}
 
 		// Phase 2B: imports + File->File resolution for TS/JS local relatives.
