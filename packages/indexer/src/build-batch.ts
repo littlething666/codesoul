@@ -25,6 +25,10 @@ export type BuildBatchResult = {
 	vectorInputs: EmbedInput[]
 }
 
+/** Cap a single Block payload at this many characters before embedding so a
+ * pathological mega-block can't blow up an embedder request. Phase 7. */
+const BLOCK_TEXT_BUDGET = 4096
+
 /**
  * Pure (filesystem-free) batch builder used to make indexer tests deterministic.
  *
@@ -33,6 +37,12 @@ export type BuildBatchResult = {
  *
  * EmbedInputs emitted here are always `kind: "node"`. Query embeddings live
  * in the retrieval pipeline.
+ *
+ * Two payloadKinds today:
+ *   - "FunctionSummary" — one per Function/Method/Class node.
+ *   - "Block"           — one per Block node (Phase 7). Block bodies are
+ *                          extracted from `f.source` using the Block's
+ *                          `evidence` line range, so we never re-parse.
  */
 export const buildBatch = async (
 	parser: Parser,
@@ -54,14 +64,46 @@ export const buildBatch = async (
 		})
 		nodes.push(...result.nodes)
 		edges.push(...result.edges)
+
+		// Cache source lines once per file for Block body slicing. We use
+		// line ranges (already stored in evidence) instead of byte indices
+		// so this stays parser-agnostic — MockParser doesn't expose a
+		// tree-sitter SyntaxNode and that's fine; it never emits Block
+		// nodes anyway, but the slicing path must still be safe.
+		let sourceLines: string[] | null = null
+		const getSourceLines = (): string[] => {
+			if (!sourceLines) sourceLines = f.source.split("\n")
+			return sourceLines
+		}
+
 		for (const n of result.nodes) {
-			if (n.kind === "Function" || n.kind === "Method" || n.kind === "Class") {
+			if (
+				n.kind === "Function" ||
+				n.kind === "Method" ||
+				n.kind === "Class"
+			) {
 				vectorInputs.push({
 					kind: "node",
 					nodeId: n.id,
 					contentHash: n.contentHash,
 					payloadKind: "FunctionSummary",
 					text: `${n.qualifiedName}\n${n.signature}`,
+				})
+			} else if (n.kind === "Block") {
+				const lines = getSourceLines()
+				const startIdx = Math.max(0, n.evidence.startLine - 1)
+				const endIdx = Math.max(startIdx, n.evidence.endLine)
+				const bodyText = lines.slice(startIdx, endIdx).join("\n")
+				const capped =
+					bodyText.length > BLOCK_TEXT_BUDGET
+						? bodyText.slice(0, BLOCK_TEXT_BUDGET)
+						: bodyText
+				vectorInputs.push({
+					kind: "node",
+					nodeId: n.id,
+					contentHash: n.contentHash,
+					payloadKind: "Block",
+					text: `${n.qualifiedName}\n${n.signature}\n${capped}`,
 				})
 			}
 		}

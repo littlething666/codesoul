@@ -595,3 +595,130 @@ describe("TreeSitterParser intra-file CALLS (Phase 2C)", () => {
 		expect(callsEdges.length).toBe(1)
 	})
 })
+
+// Build a TS function body whose line span exceeds the default block
+// extraction line threshold (60). The body is a single big if-statement so
+// the trigger fires (lineSpan > 60) and exactly one Block is emitted.
+const buildLargeIfFunction = (name: string): string => {
+	const stmts = Array.from({ length: 80 }, (_, i) => `\t\tx = x + ${i}`).join(
+		"\n",
+	)
+	return `export function ${name}(x: number): number {\n\tif (x > 0) {\n${stmts}\n\t}\n\treturn x\n}\n`
+}
+
+describe("TreeSitterParser block extraction (Phase 7)", () => {
+	it("emits ZERO Block nodes for small functions under default thresholds", async () => {
+		const r = await parse(
+			"typescript",
+			"src/small.ts",
+			`export function f(x: number) { if (x > 0) { return 1 } return 0 }\n`,
+		)
+		const blocks = r.nodes.filter((n) => n.kind === "Block")
+		expect(blocks).toHaveLength(0)
+	})
+
+	it("emits Block nodes when the function body line span exceeds the default threshold", async () => {
+		const src = buildLargeIfFunction("big")
+		const r = await parse("typescript", "src/large.ts", src)
+		const blocks = r.nodes.filter((n) => n.kind === "Block")
+		expect(blocks.length).toBeGreaterThanOrEqual(1)
+		const firstBlock = blocks[0]
+		expect(firstBlock?.signature).toBe("if")
+		expect(firstBlock?.qualifiedName).toBe(
+			"src/large.ts::big#block:0",
+		)
+		const fn = r.nodes.find(
+			(n) =>
+				n.kind === "Function" && n.qualifiedName === "src/large.ts::big",
+		)
+		expect(fn).toBeDefined()
+		if (!fn || !firstBlock) return
+		const contains = r.edges.find(
+			(e) =>
+				e.src === fn.id &&
+				e.dst === firstBlock.id &&
+				e.type === "CONTAINS",
+		)
+		expect(contains).toBeDefined()
+	})
+
+	it("respects a custom small token threshold", async () => {
+		const { TreeSitterParser: TSP } = await import("../tree-sitter.js")
+		const p = new TSP({ blockExtraction: { tokenThreshold: 1, lineThreshold: 1 } })
+		const r = await p.parseFile({
+			repoId: "r",
+			indexRunId: "run_test",
+			batchId: "batch_test",
+			path: "src/tiny.ts",
+			language: "typescript",
+			source: `export function tiny(x: number) { if (x) { return 1 } for (const y of [1]) { } return 0 }\n`,
+		})
+		const blocks = r.nodes.filter((n) => n.kind === "Block")
+		expect(blocks.length).toBeGreaterThanOrEqual(2)
+		const sigs = blocks.map((b) => b.signature)
+		expect(sigs).toContain("if")
+		expect(sigs).toContain("for")
+	})
+
+	it("is deterministic across runs for Block ordinals and ids", async () => {
+		const src = buildLargeIfFunction("f")
+		const a = await parse("typescript", "src/x.ts", src)
+		const b = await parse("typescript", "src/x.ts", src)
+		const toIds = (r: ParseResult) =>
+			r.nodes
+				.filter((n) => n.kind === "Block")
+				.map((n) => n.id)
+		expect(toIds(a)).toEqual(toIds(b))
+	})
+
+	it("distinguishes same-named methods on different classes by Block id", async () => {
+		const { TreeSitterParser: TSP } = await import("../tree-sitter.js")
+		const p = new TSP({ blockExtraction: { tokenThreshold: 1, lineThreshold: 1 } })
+		const r = await p.parseFile({
+			repoId: "r",
+			indexRunId: "run_test",
+			batchId: "batch_test",
+			path: "src/dup.ts",
+			language: "typescript",
+			source: `export class A {\n\trun(x: number) { if (x) { return 1 } return 0 }\n}\nexport class B {\n\trun(x: number) { if (x) { return 2 } return 0 }\n}\n`,
+		})
+		const blocks = r.nodes.filter((n) => n.kind === "Block")
+		expect(blocks).toHaveLength(2)
+		expect(blocks[0]?.id).not.toBe(blocks[1]?.id)
+		const qns = blocks.map((b) => b.qualifiedName).sort()
+		expect(qns).toEqual([
+			"src/dup.ts::A.run#block:0",
+			"src/dup.ts::B.run#block:0",
+		])
+	})
+
+	it("emits Block CONTAINS edges with correct edgeContentHash", async () => {
+		const src = buildLargeIfFunction("big")
+		const r = await parse("typescript", "src/y.ts", src)
+		const fn = r.nodes.find(
+			(n) => n.kind === "Function" && n.qualifiedName === "src/y.ts::big",
+		)
+		const block = r.nodes.find((n) => n.kind === "Block")
+		expect(fn && block).toBeTruthy()
+		if (!fn || !block) return
+		const edge = r.edges.find(
+			(e) =>
+				e.src === fn.id && e.dst === block.id && e.type === "CONTAINS",
+		)
+		expect(edge).toBeDefined()
+		expect(edge?.contentHash).toBe(
+			edgeContentHash({
+				src: fn.id,
+				type: "CONTAINS",
+				dst: block.id,
+			}),
+		)
+	})
+
+	it("validates Block nodes and CONTAINS edges against the schemas", async () => {
+		const src = buildLargeIfFunction("f")
+		const r = await parse("typescript", "src/z.ts", src)
+		for (const n of r.nodes) GraphNodeSchema.parse(n)
+		for (const e of r.edges) GraphEdgeSchema.parse(e)
+	})
+})
