@@ -1,6 +1,7 @@
 import { createRequire } from "node:module"
 import type { GraphEdge, GraphNode, Language, NodeKind } from "@codesoul/core"
 import {
+	ByteTokenEstimator,
 	GraphEdge as GraphEdgeSchema,
 	GraphNode as GraphNodeSchema,
 	SCHEMA_VERSION,
@@ -359,6 +360,100 @@ const qualifiedNameFor = (path: string, decl: Decl): string => {
 	return `${path}::${decl.name}`
 }
 
+// ---- Block extraction (Phase 7f / PR E) -----------------------------------
+
+/** AST node types that represent logical blocks within function/method bodies. */
+const TS_BLOCK_TYPES = new Set([
+	"if_statement",
+	"else_clause",
+	"for_statement",
+	"for_in_statement",
+	"while_statement",
+	"switch_statement",
+	"try_statement",
+	"catch_clause",
+	"finally_clause",
+	"arrow_function",
+	"function_expression",
+	"class_declaration",
+])
+
+const PY_BLOCK_TYPES = new Set([
+	"if_statement",
+	"elif_clause",
+	"else_clause",
+	"for_statement",
+	"while_statement",
+	"try_statement",
+	"except_clause",
+	"finally_clause",
+	"with_statement",
+	"match_statement",
+	"case_clause",
+	"function_definition",
+	"class_definition",
+])
+
+type BlockInfo = {
+	ordinal: number
+	blockKind: string
+	startLine: number
+	endLine: number
+	bodyText: string
+}
+
+const BLOCK_TOKEN_THRESHOLD = 512
+const BLOCK_LINE_THRESHOLD = 60
+const tokenEstimator = new ByteTokenEstimator()
+
+/**
+ * Collect logical child blocks from a function/method body.
+ * Only invoked when the parent exceeds the token or line-span threshold.
+ */
+const collectBlocksFromBody = (
+	bodyNode: SyntaxNode,
+	source: string,
+	blockTypes: ReadonlySet<string>,
+): BlockInfo[] => {
+	const blocks: BlockInfo[] = []
+	let ordinal = 0
+
+	const walkBody = (node: SyntaxNode): void => {
+		for (let i = 0; i < node.namedChildCount; i++) {
+			const child = node.namedChild(i)
+			if (!child) continue
+			if (blockTypes.has(child.type)) {
+				blocks.push({
+					ordinal: ordinal++,
+					blockKind: child.type,
+					startLine: child.startPosition.row + 1,
+					endLine: child.endPosition.row + 1,
+					bodyText: source.slice(child.startIndex, child.endIndex),
+				})
+				// Recursively walk into the block for nested blocks.
+				walkBody(child)
+			} else {
+				// Walk other children (including statement_block) for nested blocks.
+				walkBody(child)
+			}
+		}
+	}
+
+	walkBody(bodyNode)
+	return blocks
+}
+
+/**
+ * Determine whether block extraction should be enabled for a decl.
+ * Returns true if the decl's body exceeds either the token or line threshold.
+ */
+const shouldExtractBlocks = (decl: Decl): boolean => {
+	const lineSpan = decl.endLine - decl.startLine + 1
+	if (lineSpan > BLOCK_LINE_THRESHOLD) return true
+	const estimatedTokens = tokenEstimator.estimate(decl.bodyText)
+	return estimatedTokens > BLOCK_TOKEN_THRESHOLD
+}
+
 // ---- Import extraction (Phase 2B) -----------------------------------------
 
 type ImportInfo = {
@@ -619,6 +714,74 @@ export class TreeSitterParser implements Parser {
 					schemaVersion: SCHEMA_VERSION,
 				}),
 			)
+
+			// Phase 7f / PR E: Block extraction for long functions/methods.
+			if (
+				(decl.kind === "Function" || decl.kind === "Method") &&
+				shouldExtractBlocks(decl)
+			) {
+				// Find the body node from the original AST to walk for blocks.
+				const blockTypes =
+					args.language === "python"
+						? PY_BLOCK_TYPES
+						: TS_BLOCK_TYPES
+
+				const blocks = collectBlocksFromBody(
+					tree.rootNode,
+					args.source,
+					blockTypes,
+				)
+
+				for (const block of blocks) {
+					const blockQName = `${qualifiedName}#block:${block.ordinal}:${block.blockKind}`
+					const blockId = stableId({
+						repoId: args.repoId,
+						relativePath: args.path,
+						symbolKind: "Block",
+						qualifiedName: blockQName,
+					})
+					nodes.push(
+						GraphNodeSchema.parse({
+							id: blockId,
+							contentHash: contentId({
+								normalizedSignature: normalizeSignature(""),
+								normalizedBody: normalizeBody(block.bodyText),
+							}),
+							repoId: args.repoId,
+							indexRunId: args.indexRunId,
+							batchId: args.batchId,
+							sourcePath: args.path,
+							schemaVersion: SCHEMA_VERSION,
+							path: args.path,
+							kind: "Block",
+							language: args.language,
+							qualifiedName: blockQName,
+							signature: block.blockKind,
+							evidence: {
+								startLine: block.startLine,
+								endLine: block.endLine,
+							},
+						}),
+					)
+					edges.push(
+						GraphEdgeSchema.parse({
+							src: id,
+							dst: blockId,
+							type: "CONTAINS",
+							repoId: args.repoId,
+							indexRunId: args.indexRunId,
+							batchId: args.batchId,
+							sourcePath: args.path,
+							contentHash: edgeContentHash({
+								src: id,
+								type: "CONTAINS",
+								dst: blockId,
+							}),
+							schemaVersion: SCHEMA_VERSION,
+						}),
+					)
+				}
+			}
 		}
 
 		// Phase 2B: imports + File->File resolution for TS/JS local relatives.

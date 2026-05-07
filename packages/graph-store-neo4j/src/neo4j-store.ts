@@ -33,7 +33,7 @@ export type Neo4jGraphStoreOptions = {
 	 * Defaults to false so callers that bootstrap explicitly (the
 	 * integration test, ops scripts) don't pay the round-trip twice.
 	 * Wiring code (`apps/cli/src/wiring.ts`) sets this to true so
-	 * `wirePhase0` can stay synchronous: a fresh CLI invocation against
+	 * `wireRuntime` can stay synchronous: a fresh CLI invocation against
 	 * a brand-new Neo4j database doesn't require an out-of-band
 	 * migration step before the first `index` run.
 	 *

@@ -77,7 +77,7 @@ export const mergeRigGraphs = (
 
 /**
  * Phase 7e foundation. `RigDispatcher` is the single entry point that
- * `wirePhase0` / `FixtureIndexer` will use once Phase 7e wiring lands:
+ * `wireRuntime` / `FixtureIndexer` uses:
  *
  *   const dispatcher = new RigDispatcher([
  *     new PackageJsonRigExtractor(),

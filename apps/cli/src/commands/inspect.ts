@@ -1,6 +1,6 @@
 import { InvalidArgumentError, type Command } from "commander"
 import type { EdgeType, NodeKind } from "@codesoul/core"
-import type { Phase0Deps } from "../wiring.js"
+import type { RuntimeDeps } from "../wiring.js"
 
 const parsePositiveInt = (value: string): number => {
 	const n = Number(value)
@@ -26,10 +26,10 @@ type VectorsOptions = {
 	run?: string
 }
 
-export const registerInspect = (program: Command, deps: Phase0Deps): void => {
+export const registerInspect = (program: Command, deps: RuntimeDeps): void => {
 	const inspect = program
 		.command("inspect")
-		.description("Inspect indexed data (Phase 0/0.5: backed by mock stores)")
+		.description("Inspect indexed data")
 
 	inspect
 		.command("nodes")

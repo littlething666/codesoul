@@ -64,6 +64,15 @@ export const buildBatch = async (
 					text: `${n.qualifiedName}\n${n.signature}`,
 				})
 			}
+			if (n.kind === "Block") {
+				vectorInputs.push({
+					kind: "node",
+					nodeId: n.id,
+					contentHash: n.contentHash,
+					payloadKind: "Block",
+					text: `${n.qualifiedName}\n${n.signature}`,
+				})
+			}
 		}
 	}
 

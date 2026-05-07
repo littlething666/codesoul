@@ -2,13 +2,14 @@ import { InvalidArgumentError, type Command } from "commander"
 import {
 	EmbedderMode,
 	GraphStoreMode,
+	ManifestStoreMode,
 	ParserMode,
 	RerankerMode,
 	RigExtractorKind,
 	VectorStoreMode,
 } from "@codesoul/core"
-import type { Phase0Deps } from "../wiring.js"
-import { wirePhase0 } from "../wiring.js"
+import type { RuntimeDeps } from "../wiring.js"
+import { wireRuntime } from "../wiring.js"
 
 type IndexOptions = {
 	repoId?: string
@@ -20,6 +21,8 @@ type IndexOptions = {
 	reranker?: RerankerMode
 	vectorStore?: VectorStoreMode
 	graphStore?: GraphStoreMode
+	manifestStore?: ManifestStoreMode
+	profile?: string
 }
 
 const parseParserMode = (value: string): ParserMode => {
@@ -64,6 +67,14 @@ const parseGraphStoreMode = (value: string): GraphStoreMode => {
 	return result.data
 }
 
+const parseManifestStoreMode = (value: string): ManifestStoreMode => {
+	const result = ManifestStoreMode.safeParse(value)
+	if (!result.success) {
+		throw new InvalidArgumentError("must be one of: memory, sqlite")
+	}
+	return result.data
+}
+
 const parseRigExtractorList = (value: string): RigExtractorKind[] => {
 	const items = value
 		.split(",")
@@ -91,10 +102,10 @@ const rigListsEqual = (
 	return true
 }
 
-export const registerIndex = (program: Command, deps: Phase0Deps): void => {
+export const registerIndex = (program: Command, deps: RuntimeDeps): void => {
 	program
 		.command("index")
-		.description("Index a repository (Phase 0: mocks only)")
+		.description("Index a repository")
 		.argument("<repoPath>", "path to the repository")
 		.option("--repo-id <id>", "explicit repo id")
 		.option("--index-run-id <id>", "explicit index run id")
@@ -129,6 +140,15 @@ export const registerIndex = (program: Command, deps: Phase0Deps): void => {
 			"graph store backend (memory | neo4j; neo4j requires CODESOUL_NEO4J_URL/USER/PASSWORD)",
 			parseGraphStoreMode,
 		)
+		.option(
+			"--manifest-store <mode>",
+			"manifest/WAL backend (memory | sqlite; sqlite defaults to .codesoul/manifest.db)",
+			parseManifestStoreMode,
+		)
+		.option(
+			"--profile <name>",
+			"shorthand profile: local-persist sets graphStore=neo4j, vectorStore=lancedb, manifestStore=sqlite",
+		)
 		.action(async (repoPath: string, opts: IndexOptions) => {
 			const parserChanged =
 				opts.parser !== undefined && opts.parser !== deps.config.parser
@@ -147,23 +167,40 @@ export const registerIndex = (program: Command, deps: Phase0Deps): void => {
 			const graphStoreChanged =
 				opts.graphStore !== undefined &&
 				opts.graphStore !== deps.config.graphStore
+			const manifestStoreChanged =
+				opts.manifestStore !== undefined &&
+				opts.manifestStore !== deps.config.manifestStore
+			const profileChanged = opts.profile !== undefined
+
+			// Expand --profile local-persist into its individual flags.
+			const profileOverrides: Partial<Parameters<typeof wireRuntime>[0]> = {}
+			if (opts.profile === "local-persist") {
+				profileOverrides.graphStore = "neo4j"
+				profileOverrides.vectorStore = "lancedb"
+				profileOverrides.manifestStore = "sqlite"
+			}
+
 			const active =
 				parserChanged ||
 				rigChanged ||
 				embedderChanged ||
 				rerankerChanged ||
 				vectorStoreChanged ||
-				graphStoreChanged
-					? wirePhase0({
+				graphStoreChanged ||
+				manifestStoreChanged ||
+				profileChanged
+					? wireRuntime({
 							parser: opts.parser ?? deps.config.parser,
 							rigExtractors:
 								opts.rigExtractors ?? deps.config.rigExtractors,
 							embedder: opts.embedder ?? deps.config.embedder,
 							reranker: opts.reranker ?? deps.config.reranker,
 							vectorStore:
-								opts.vectorStore ?? deps.config.vectorStore,
+								opts.vectorStore ?? profileOverrides.vectorStore ?? deps.config.vectorStore,
 							graphStore:
-								opts.graphStore ?? deps.config.graphStore,
+								opts.graphStore ?? profileOverrides.graphStore ?? deps.config.graphStore,
+							manifestStore:
+								opts.manifestStore ?? profileOverrides.manifestStore ?? deps.config.manifestStore,
 						})
 					: deps
 
@@ -185,6 +222,7 @@ export const registerIndex = (program: Command, deps: Phase0Deps): void => {
 						reranker: active.config.reranker,
 						vectorStore: active.config.vectorStore,
 						graphStore: active.config.graphStore,
+						manifestStore: active.config.manifestStore,
 						nodes: result.nodeCount,
 						edges: result.edgeCount,
 						vectors: result.vectorCount,

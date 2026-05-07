@@ -181,7 +181,7 @@ export class FixtureIndexer implements Indexer {
 
 		// Phase 7e: extract the RIG graph and materialize it into the same
 		// node/edge stream as parser output. The dispatcher (or a single
-		// extractor) is wired in via `wirePhase0` from `IndexConfig.rigExtractors`.
+		// extractor) is wired in via `wireRuntime` from `IndexConfig.rigExtractors`.
 		const rigGraph = await this.deps.rig.extract(input.repoPath)
 		const rigBatch = materializeRigGraph(rigGraph, {
 			repoId: input.repoId,
@@ -210,7 +210,7 @@ export class FixtureIndexer implements Indexer {
 					embeddingRevision: e.embeddingRevision,
 					embeddingDim: e.embeddingDim,
 					vector: e.vector,
-					payloadKind: "FunctionSummary",
+					payloadKind: inp.payloadKind,
 					repoId: input.repoId,
 					indexRunId: input.indexRunId,
 					batchId,

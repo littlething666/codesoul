@@ -2,9 +2,16 @@
 
 **CodeSoul** is a repository **architecture extraction layer** — not a vector retrieval toy. Every node and edge in the graph traces back to evidence in code, and every result is explainable.
 
-This repository tracks the staged build-out from the **Phase 0** scaffold (compiling, end-to-end skeleton with deterministic mocks) toward the production design described in the planning doc. Phases 0–2C, 3, and 7a–7e are landed; Phase 5 (HTTP embedder/reranker + Python model server) is the active surface.
+This repository tracks the staged build-out toward the production design. Phases 0–7e are landed. Current focus is **Gate D: architecture retrieval quality** — see [ROADMAP.md](./ROADMAP.md) for capability gates and current status.
 
-See `Phase 0 — Interfaces & Core Schema` (in the planning doc) for the full design.
+## Recent additions
+
+- **Naming**: `wirePhase0` / `Phase0Deps` → `wireRuntime` / `RuntimeDeps` (backwards-compatible aliases kept)
+- **Doctor**: `codesoul doctor` health-checks all configured backends
+- **Persistent profile**: `--manifest-store sqlite`, `--profile local-persist`, sqlite manifest wiring
+- **Graph export**: `codesoul graph export --repo-id/--index-run-id` with deterministic sort
+- **Block extraction**: TreeSitterParser extracts child blocks for functions > 60 lines or > 512 tokens
+- **Query goldens**: Architecture tests verify "what calls greet" returns greetMany, "where is greet defined" returns the correct file
 
 ## Quick start
 
@@ -53,6 +60,14 @@ fixtures/
 - DTOs use camelCase. Adapters may translate to backend-specific naming.
 - Every package subpath is declared in `"exports"` (including `./mock`).
 - No `require`, no `__dirname`, no CJS shims.
+
+## Persistent local mode
+
+Use `--manifest-store sqlite`, `--graph-store neo4j`, and `--vector-store lancedb` together for a fully persistent index that survives process restarts. Check backend health with `codesoul doctor`.
+
+### Manifest store (SQLite)
+
+The `SqliteManifestStore` persists batch manifests, events, and ingestion records to `.codesoul/manifest.db` (or `CODESOUL_MANIFEST_PATH`). WAL journal mode is enabled by default.
 
 ## Neo4j graph store (Phase 3)
 

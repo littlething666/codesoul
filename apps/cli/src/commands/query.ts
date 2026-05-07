@@ -7,8 +7,8 @@ import {
 	VectorStoreMode,
 } from "@codesoul/core"
 import { retrieve } from "@codesoul/retrieval"
-import type { Phase0Deps } from "../wiring.js"
-import { wirePhase0 } from "../wiring.js"
+import type { RuntimeDeps } from "../wiring.js"
+import { wireRuntime } from "../wiring.js"
 
 type QueryOptions = {
 	limit: number
@@ -59,10 +59,10 @@ const parseGraphStoreMode = (value: string): GraphStoreMode => {
 	return result.data
 }
 
-export const registerQuery = (program: Command, deps: Phase0Deps): void => {
+export const registerQuery = (program: Command, deps: RuntimeDeps): void => {
 	program
 		.command("query")
-		.description("Run a hybrid retrieval query (Phase 0: mocks only)")
+		.description("Run a hybrid retrieval query")
 		.argument("<text>", "query text")
 		.option("--limit <n>", "max snippets", parsePositiveInt, 10)
 		.option(
@@ -90,6 +90,13 @@ export const registerQuery = (program: Command, deps: Phase0Deps): void => {
 			parseGraphStoreMode,
 		)
 		.action(async (text: string, opts: QueryOptions) => {
+			// Warn when querying memory-backed stores (data does not survive process restarts).
+			if (deps.config.graphStore === "memory" || deps.config.vectorStore === "memory") {
+				console.error(
+					"⚠️  Querying memory-backed stores: results come from this process only. " +
+					"Use --graph-store neo4j --vector-store lancedb for persistent queries.",
+				)
+			}
 			const embedderChanged =
 				opts.embedder !== undefined &&
 				opts.embedder !== deps.config.embedder
@@ -107,7 +114,7 @@ export const registerQuery = (program: Command, deps: Phase0Deps): void => {
 				rerankerChanged ||
 				vectorStoreChanged ||
 				graphStoreChanged
-					? wirePhase0({
+					? wireRuntime({
 							embedder: opts.embedder ?? deps.config.embedder,
 							reranker: opts.reranker ?? deps.config.reranker,
 							vectorStore:

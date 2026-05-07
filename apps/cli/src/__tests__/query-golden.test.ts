@@ -1,6 +1,26 @@
 import { describe, expect, it, vi } from "vitest"
+import { readFile } from "node:fs/promises"
+import { join } from "node:path"
+import type { GraphEdge, GraphNode, VectorRow } from "@codesoul/core"
+import {
+	GraphEdge as GraphEdgeSchema,
+	GraphNode as GraphNodeSchema,
+	SCHEMA_VERSION,
+	contentId,
+	edgeContentHash,
+	normalizeBody,
+	normalizeSignature,
+	stableId,
+} from "@codesoul/core"
+import { MockEmbedder } from "@codesoul/embedder/mock"
+import { MockGraphStore } from "@codesoul/graph-store/mock"
+import { MockReranker } from "@codesoul/reranker/mock"
+import { MockVectorStore } from "@codesoul/vector-store/mock"
+import { FileSystemSourceProvider } from "@codesoul/core"
+import { retrieve } from "@codesoul/retrieval"
+import { TreeSitterParser } from "@codesoul/parser/tree-sitter"
 import { buildProgram } from "../program.js"
-import { wirePhase0 } from "../wiring.js"
+import { wireRuntime } from "../wiring.js"
 
 /**
  * Phase 0 query golden tests.
@@ -38,7 +58,7 @@ const captureStdout = async (
 
 describe("codesoul query golden", () => {
 	it("emits the empty ContextBundle shape on default mock wiring", async () => {
-		const deps = wirePhase0()
+		const deps = wireRuntime()
 		const program = buildProgram(deps).exitOverride()
 		const lines = await captureStdout(async () => {
 			await program.parseAsync(["query", "greet"], { from: "user" })
@@ -74,7 +94,7 @@ describe("codesoul query golden", () => {
 	})
 
 	it("echoes the query text verbatim into the bundle", async () => {
-		const deps = wirePhase0()
+		const deps = wireRuntime()
 		const program = buildProgram(deps).exitOverride()
 		const lines = await captureStdout(async () => {
 			await program.parseAsync(
@@ -91,7 +111,7 @@ describe("codesoul query golden", () => {
 	})
 
 	it("--limit is plumbed through (still empty under mocks)", async () => {
-		const deps = wirePhase0()
+		const deps = wireRuntime()
 		const program = buildProgram(deps).exitOverride()
 		const lines = await captureStdout(async () => {
 			await program.parseAsync(["query", "greet", "--limit", "5"], {
@@ -112,7 +132,7 @@ describe("codesoul query golden", () => {
 		// array is empty under mocks so the loop body simply asserts no
 		// stray snippets escape; once a non-mock fixture is wired in, the
 		// loop becomes the schema lock.
-		const deps = wirePhase0()
+		const deps = wireRuntime()
 		const program = buildProgram(deps).exitOverride()
 		const lines = await captureStdout(async () => {
 			await program.parseAsync(["query", "greet"], { from: "user" })
@@ -127,6 +147,197 @@ describe("codesoul query golden", () => {
 				"path",
 				"text",
 			])
+		}
+	})
+})
+
+describe("codesoul query golden (seeded tiny-ts-lib)", () => {
+	/**
+	 * Parse the tiny-ts-lib fixture with TreeSitterParser, seed the resulting
+	 * nodes/edges into a MockGraphStore and embed with MockEmbedder into a
+	 * MockVectorStore, then verify architecture queries return expected results.
+	 */
+	const seedFixture = async (): Promise<{
+		graph: MockGraphStore
+		vectors: MockVectorStore
+		sourceProvider: FileSystemSourceProvider
+	}> => {
+		// Resolve from the workspace root (vitest runs from the package dir).
+		const repoPath = join(process.cwd(), "../../fixtures/tiny-ts-lib")
+		const repoId = "repo_tiny"
+		const indexRunId = "run_golden"
+		const batchId = "batch_golden"
+
+		const files = [
+			{ path: "src/greet.ts", language: "typescript" as const },
+			{ path: "src/farewell.ts", language: "typescript" as const },
+		]
+
+		const parser = new TreeSitterParser()
+		const graph = new MockGraphStore()
+		const vectors = new MockVectorStore()
+		const embedder = new MockEmbedder()
+		const sourceProvider = new FileSystemSourceProvider(repoPath)
+
+		const allNodes: GraphNode[] = []
+		const allEdges: GraphEdge[] = []
+
+		for (const f of files) {
+			const source = await readFile(join(repoPath, f.path), "utf8")
+			const result = await parser.parseFile({
+				repoId,
+				indexRunId,
+				batchId,
+				path: f.path,
+				language: f.language,
+				source,
+			})
+			allNodes.push(...result.nodes)
+			allEdges.push(...result.edges)
+
+			// Embed Function/Method nodes
+			for (const n of result.nodes) {
+				if (
+					n.kind === "Function" ||
+					n.kind === "Method" ||
+					n.kind === "Class"
+				) {
+					const [emb] = await embedder.embed([
+						{
+							kind: "node",
+							nodeId: n.id,
+							contentHash: n.contentHash,
+							payloadKind: "FunctionSummary",
+							text: `${n.qualifiedName}\n${n.signature}`,
+						},
+					])
+					if (emb) {
+						await vectors.upsert([
+							{
+								nodeId: n.id,
+								embeddingModel: emb.embeddingModel,
+								embeddingRevision: emb.embeddingRevision,
+								embeddingDim: emb.embeddingDim,
+								vector: emb.vector,
+								payloadKind: "FunctionSummary",
+								repoId,
+								indexRunId,
+								batchId,
+								sourcePath: n.path,
+								contentHash: n.contentHash,
+								schemaVersion: SCHEMA_VERSION,
+							},
+						])
+					}
+				}
+			}
+		}
+
+		await graph.upsertNodes(allNodes)
+		await graph.upsertEdges(allEdges)
+
+		return { graph, vectors, sourceProvider }
+	}
+
+	it("'greet' exact lookup finds the greet Function node", async () => {
+		const { graph, vectors, sourceProvider } = await seedFixture()
+		const reranker = new MockReranker()
+
+		const bundle = await retrieve(
+			{ graph, vectors, embedder: new MockEmbedder(), reranker, sourceProvider },
+			{ query: "greet", limit: 10 },
+		)
+
+		// We expect at least one snippet pointing to src/greet.ts
+		expect(bundle.snippets.length).toBeGreaterThan(0)
+		const greetSnippets = bundle.snippets.filter((s) =>
+			s.path.includes("greet.ts"),
+		)
+		expect(greetSnippets.length).toBeGreaterThan(0)
+	})
+
+	it("'what calls greet' finds greetMany via exact lookup on greet", async () => {
+		const { graph, vectors, sourceProvider } = await seedFixture()
+		const reranker = new MockReranker()
+
+		const bundle = await retrieve(
+			{ graph, vectors, embedder: new MockEmbedder(), reranker, sourceProvider },
+			{ query: "what calls greet", limit: 10 },
+		)
+
+		// greet exact match + graph expansion should surface greetMany.
+		// The retrieval pipeline finds "greet" as exact lookup, then
+		// expands neighbors (1 hop) which should include greetMany via CALLS edge.
+		const nodeIds = bundle.snippets.map((s) => s.nodeId)
+
+		// Find the greetMany node
+		const greetManyNode = (
+			await graph.listNodes({ pathPrefix: "src/greet.ts" })
+		).find((n) => n.qualifiedName.includes("greetMany"))
+
+		if (greetManyNode) {
+			// greetMany should appear in snippets or at least one of
+			// greet's callers (greetMany) should be reachable via graph expansion.
+			const hasGreetMany = nodeIds.includes(greetManyNode.id)
+			expect(hasGreetMany).toBe(true)
+		}
+	})
+
+	it("'where is greet defined' returns src/greet.ts", async () => {
+		const { graph, vectors, sourceProvider } = await seedFixture()
+		const reranker = new MockReranker()
+
+		const bundle = await retrieve(
+			{ graph, vectors, embedder: new MockEmbedder(), reranker, sourceProvider },
+			{ query: "where is greet defined", limit: 10 },
+		)
+
+		// Exact lookup on "greet" should find the greet function.
+		const greetPath = bundle.snippets.find((s) =>
+			s.path.includes("greet.ts"),
+		)
+		expect(greetPath).toBeDefined()
+		expect(greetPath!.path).toBe("src/greet.ts")
+	})
+
+	it("graph export returns non-empty nodes and edges after seeding", async () => {
+		const { graph } = await seedFixture()
+
+		const nodes = await graph.listNodes()
+		const edges = await graph.listEdges()
+
+		expect(nodes.length).toBeGreaterThan(0)
+		expect(edges.length).toBeGreaterThan(0)
+
+		// Verify we can deterministically sort (as graph-export.ts does).
+		const sortedNodes = [...nodes].sort((a, b) => a.id.localeCompare(b.id))
+		expect(sortedNodes.length).toBe(nodes.length)
+		for (let i = 1; i < sortedNodes.length; i++) {
+			expect(sortedNodes[i]!.id.localeCompare(sortedNodes[i - 1]!.id)).toBeGreaterThanOrEqual(0)
+		}
+
+		const sortedEdges = [...edges].sort((a, b) => {
+			const cmpSrc = a.src.localeCompare(b.src)
+			if (cmpSrc !== 0) return cmpSrc
+			const cmpType = a.type.localeCompare(b.type)
+			if (cmpType !== 0) return cmpType
+			return a.dst.localeCompare(b.dst)
+		})
+		expect(sortedEdges.length).toBe(edges.length)
+		for (let i = 1; i < sortedEdges.length; i++) {
+			const prev = sortedEdges[i - 1]!
+			const curr = sortedEdges[i]!
+			const cmpSrc = prev.src.localeCompare(curr.src)
+			if (cmpSrc !== 0) {
+				expect(cmpSrc).toBeLessThan(0)
+			} else {
+				const cmpType = prev.type.localeCompare(curr.type)
+				if (cmpType !== 0) {
+					expect(cmpType).toBeLessThan(0)
+				} else {
+					expect(prev.dst.localeCompare(curr.dst)).toBeLessThanOrEqual(0)
+				}
+			}
 		}
 	})
 })

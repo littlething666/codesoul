@@ -20,7 +20,7 @@ import {
 } from "@codesoul/reranker-http"
 import { MockVectorStore } from "@codesoul/vector-store/mock"
 import { LanceDBVectorStore } from "@codesoul/vector-store-lancedb"
-import { wirePhase0 } from "../wiring.js"
+import { wireRuntime } from "../wiring.js"
 
 const MODEL_E = "Qwen/Qwen3-Embedding-0.6B"
 const REV_E = "emb-rev"
@@ -37,26 +37,26 @@ const silentLogger = {
 	trace: vi.fn(),
 	fatal: vi.fn(),
 	child: () => silentLogger,
-} as unknown as Parameters<typeof wirePhase0>[1] extends infer T
+} as unknown as Parameters<typeof wireRuntime>[1] extends infer T
 	? T extends { logger?: infer L }
 		? L
 		: never
 	: never
 
-describe("wirePhase0 (http modes)", () => {
+describe("wireRuntime (http modes)", () => {
 	it("defaults to MockEmbedder when embedder mode is 'mock'", () => {
-		const deps = wirePhase0({}, { env: {}, logger: silentLogger })
+		const deps = wireRuntime({}, { env: {}, logger: silentLogger })
 		expect(deps.embedder).toBeInstanceOf(MockEmbedder)
 	})
 
 	it("defaults to MockReranker when reranker mode is 'mock'", () => {
-		const deps = wirePhase0({}, { env: {}, logger: silentLogger })
+		const deps = wireRuntime({}, { env: {}, logger: silentLogger })
 		expect(deps.reranker).toBeInstanceOf(MockReranker)
 	})
 
 	it("throws AdapterUnavailableError when embedder='http' but env vars are missing", () => {
 		expect(() =>
-			wirePhase0(
+			wireRuntime(
 				{ embedder: "http" },
 				{ env: {}, logger: silentLogger },
 			),
@@ -65,7 +65,7 @@ describe("wirePhase0 (http modes)", () => {
 
 	it("throws AdapterUnavailableError when only some embedder env vars are set", () => {
 		expect(() =>
-			wirePhase0(
+			wireRuntime(
 				{ embedder: "http" },
 				{
 					env: { CODESOUL_EMBEDDER_URL: URL_E },
@@ -76,7 +76,7 @@ describe("wirePhase0 (http modes)", () => {
 	})
 
 	it("constructs HttpEmbedder when all embedder env vars are set", () => {
-		const deps = wirePhase0(
+		const deps = wireRuntime(
 			{ embedder: "http" },
 			{
 				env: {
@@ -93,7 +93,7 @@ describe("wirePhase0 (http modes)", () => {
 	})
 
 	it("wraps HttpEmbedder in FallbackEmbedder when CODESOUL_EMBEDDER_FALLBACK=mock", () => {
-		const deps = wirePhase0(
+		const deps = wireRuntime(
 			{ embedder: "http" },
 			{
 				env: {
@@ -112,7 +112,7 @@ describe("wirePhase0 (http modes)", () => {
 
 	it("throws AdapterUnavailableError when reranker='http' but env vars are missing", () => {
 		expect(() =>
-			wirePhase0(
+			wireRuntime(
 				{ reranker: "http" },
 				{ env: {}, logger: silentLogger },
 			),
@@ -120,7 +120,7 @@ describe("wirePhase0 (http modes)", () => {
 	})
 
 	it("constructs HttpReranker when all reranker env vars are set", () => {
-		const deps = wirePhase0(
+		const deps = wireRuntime(
 			{ reranker: "http" },
 			{
 				env: {
@@ -137,7 +137,7 @@ describe("wirePhase0 (http modes)", () => {
 	})
 
 	it("wraps HttpReranker in FallbackReranker when CODESOUL_RERANKER_FALLBACK=mock", () => {
-		const deps = wirePhase0(
+		const deps = wireRuntime(
 			{ reranker: "http" },
 			{
 				env: {
@@ -154,12 +154,12 @@ describe("wirePhase0 (http modes)", () => {
 	})
 
 	it("defaults sourceProvider to MockSourceProvider when CODESOUL_REPO_PATH is unset", () => {
-		const deps = wirePhase0({}, { env: {}, logger: silentLogger })
+		const deps = wireRuntime({}, { env: {}, logger: silentLogger })
 		expect(deps.sourceProvider).toBeInstanceOf(MockSourceProvider)
 	})
 
 	it("builds FileSystemSourceProvider when CODESOUL_REPO_PATH is set", () => {
-		const deps = wirePhase0(
+		const deps = wireRuntime(
 			{},
 			{
 				env: { CODESOUL_REPO_PATH: "/tmp/some-repo" },
@@ -172,22 +172,22 @@ describe("wirePhase0 (http modes)", () => {
 	it("reads from process.env when no env override is provided", () => {
 		// Sanity check that the default path doesn't crash; we don't set any
 		// CODESOUL_* vars in test env, so this stays on the mock branch.
-		const deps = wirePhase0({})
+		const deps = wireRuntime({})
 		expect(deps.embedder).toBeInstanceOf(MockEmbedder)
 		expect(deps.reranker).toBeInstanceOf(MockReranker)
 	})
 })
 
-describe("wirePhase0 (graph store, Phase 3)", () => {
+describe("wireRuntime (graph store)", () => {
 	it("defaults to MockGraphStore when graphStore mode is 'memory'", () => {
-		const deps = wirePhase0({}, { env: {}, logger: silentLogger })
+		const deps = wireRuntime({}, { env: {}, logger: silentLogger })
 		expect(deps.config.graphStore).toBe("memory")
 		expect(deps.graph).toBeInstanceOf(MockGraphStore)
 	})
 
 	it("throws AdapterUnavailableError when graphStore='neo4j' but env vars are missing", () => {
 		expect(() =>
-			wirePhase0(
+			wireRuntime(
 				{ graphStore: "neo4j" },
 				{ env: {}, logger: silentLogger },
 			),
@@ -196,7 +196,7 @@ describe("wirePhase0 (graph store, Phase 3)", () => {
 
 	it("throws AdapterUnavailableError when only some neo4j env vars are set", () => {
 		expect(() =>
-			wirePhase0(
+			wireRuntime(
 				{ graphStore: "neo4j" },
 				{
 					env: {
@@ -211,7 +211,7 @@ describe("wirePhase0 (graph store, Phase 3)", () => {
 	})
 
 	it("constructs Neo4jGraphStore when all neo4j env vars are set", () => {
-		const deps = wirePhase0(
+		const deps = wireRuntime(
 			{ graphStore: "neo4j" },
 			{
 				env: {
@@ -229,7 +229,7 @@ describe("wirePhase0 (graph store, Phase 3)", () => {
 	})
 
 	it("forwards optional CODESOUL_NEO4J_DATABASE", () => {
-		const deps = wirePhase0(
+		const deps = wireRuntime(
 			{ graphStore: "neo4j" },
 			{
 				env: {
@@ -245,16 +245,16 @@ describe("wirePhase0 (graph store, Phase 3)", () => {
 	})
 })
 
-describe("wirePhase0 (vector store, Phase 6)", () => {
+describe("wireRuntime (vector store)", () => {
 	it("defaults to MockVectorStore when vectorStore mode is 'memory'", () => {
-		const deps = wirePhase0({}, { env: {}, logger: silentLogger })
+		const deps = wireRuntime({}, { env: {}, logger: silentLogger })
 		expect(deps.config.vectorStore).toBe("memory")
 		expect(deps.vectors).toBeInstanceOf(MockVectorStore)
 	})
 
 	it("throws AdapterUnavailableError when vectorStore='lancedb' but CODESOUL_VECTOR_STORE_URI is missing", () => {
 		expect(() =>
-			wirePhase0(
+			wireRuntime(
 				{ vectorStore: "lancedb" },
 				{ env: {}, logger: silentLogger },
 			),
@@ -262,7 +262,7 @@ describe("wirePhase0 (vector store, Phase 6)", () => {
 	})
 
 	it("constructs LanceDBVectorStore when CODESOUL_VECTOR_STORE_URI is set", () => {
-		const deps = wirePhase0(
+		const deps = wireRuntime(
 			{ vectorStore: "lancedb" },
 			{
 				env: { CODESOUL_VECTOR_STORE_URI: "/tmp/codesoul-vectors" },
@@ -277,7 +277,7 @@ describe("wirePhase0 (vector store, Phase 6)", () => {
 	})
 
 	it("forwards optional CODESOUL_VECTOR_STORE_TABLE / MANIFEST_PATH / TOKENIZER_VERSION", () => {
-		const deps = wirePhase0(
+		const deps = wireRuntime(
 			{ vectorStore: "lancedb" },
 			{
 				env: {
@@ -294,21 +294,21 @@ describe("wirePhase0 (vector store, Phase 6)", () => {
 	})
 })
 
-describe("wirePhase0 (latency logging, Phase 5c)", () => {
+describe("wireRuntime (latency logging)", () => {
 	it("does NOT wrap the embedder when CODESOUL_LOG_LATENCY is unset", () => {
-		const deps = wirePhase0({}, { env: {}, logger: silentLogger })
+		const deps = wireRuntime({}, { env: {}, logger: silentLogger })
 		expect(deps.embedder).not.toBeInstanceOf(LatencyLoggingEmbedder)
 		expect(deps.embedder).toBeInstanceOf(MockEmbedder)
 	})
 
 	it("does NOT wrap the reranker when CODESOUL_LOG_LATENCY is unset", () => {
-		const deps = wirePhase0({}, { env: {}, logger: silentLogger })
+		const deps = wireRuntime({}, { env: {}, logger: silentLogger })
 		expect(deps.reranker).not.toBeInstanceOf(LatencyLoggingReranker)
 		expect(deps.reranker).toBeInstanceOf(MockReranker)
 	})
 
 	it("wraps the mock embedder/reranker when CODESOUL_LOG_LATENCY=1", () => {
-		const deps = wirePhase0(
+		const deps = wireRuntime(
 			{},
 			{
 				env: { CODESOUL_LOG_LATENCY: "1" },
@@ -321,7 +321,7 @@ describe("wirePhase0 (latency logging, Phase 5c)", () => {
 
 	it("accepts 'true' and 'yes' (case-insensitive) as truthy values", () => {
 		for (const value of ["true", "TRUE", "yes", "Yes"]) {
-			const deps = wirePhase0(
+			const deps = wireRuntime(
 				{},
 				{
 					env: { CODESOUL_LOG_LATENCY: value },
@@ -334,7 +334,7 @@ describe("wirePhase0 (latency logging, Phase 5c)", () => {
 
 	it("ignores unrecognized values like '0', 'false', or empty string", () => {
 		for (const value of ["0", "false", "no", ""]) {
-			const deps = wirePhase0(
+			const deps = wireRuntime(
 				{},
 				{
 					env: { CODESOUL_LOG_LATENCY: value },
@@ -346,7 +346,7 @@ describe("wirePhase0 (latency logging, Phase 5c)", () => {
 	})
 
 	it("wraps the http embedder (after FallbackEmbedder) when CODESOUL_LOG_LATENCY=1 and embedder=http", () => {
-		const deps = wirePhase0(
+		const deps = wireRuntime(
 			{ embedder: "http" },
 			{
 				env: {
@@ -367,7 +367,7 @@ describe("wirePhase0 (latency logging, Phase 5c)", () => {
 	})
 
 	it("wraps the http reranker when CODESOUL_LOG_LATENCY=1 and reranker=http", () => {
-		const deps = wirePhase0(
+		const deps = wireRuntime(
 			{ reranker: "http" },
 			{
 				env: {

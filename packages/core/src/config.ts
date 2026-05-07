@@ -9,6 +9,9 @@ export type GraphStoreMode = z.infer<typeof GraphStoreMode>
 export const VectorStoreMode = z.enum(["memory", "lancedb"])
 export type VectorStoreMode = z.infer<typeof VectorStoreMode>
 
+export const ManifestStoreMode = z.enum(["memory", "sqlite"])
+export type ManifestStoreMode = z.infer<typeof ManifestStoreMode>
+
 export const EmbedderMode = z.enum(["mock", "http"])
 export type EmbedderMode = z.infer<typeof EmbedderMode>
 
@@ -33,6 +36,7 @@ export const IndexConfig = z.object({
 	parser: ParserMode.default("regex"),
 	graphStore: GraphStoreMode.default("memory"),
 	vectorStore: VectorStoreMode.default("memory"),
+	manifestStore: ManifestStoreMode.default("memory"),
 	embedder: EmbedderMode.default("mock"),
 	reranker: RerankerMode.default("mock"),
 	rigExtractors: z.array(RigExtractorKind).default([]),

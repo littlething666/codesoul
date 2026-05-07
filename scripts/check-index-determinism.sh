@@ -3,12 +3,11 @@
 # same inputs must produce identical observable output. The CLI's
 # `batchId` is per-run by construction, so we strip it before
 # comparing; everything else (status, parser, rigExtractors, embedder,
-# reranker, vectorStore, graphStore, nodes, edges, vectors) must agree
-# byte-for-byte.
+# reranker, vectorStore, graphStore, manifestStore, nodes, edges, vectors)
+# must agree byte-for-byte.
 #
-# This is intentionally a thin first cut. Once the CLI grows a real
-# graph-export (currently a stub), the diff should fold in the
-# materialized graph + vector content as well.
+# The graph-export command now produces real JSON output; nightly CI
+# should diff `codesoul graph export` output in addition to index metadata.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

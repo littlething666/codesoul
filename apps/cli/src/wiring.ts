@@ -21,6 +21,7 @@ import { MockGraphStore } from "@codesoul/graph-store/mock"
 import { Neo4jGraphStore } from "@codesoul/graph-store-neo4j"
 import type { ManifestStore } from "@codesoul/manifest-store"
 import { InMemoryManifestStore } from "@codesoul/manifest-store/memory"
+import { SqliteManifestStore } from "@codesoul/manifest-store/sqlite"
 import type { Parser } from "@codesoul/parser"
 import { MockParser } from "@codesoul/parser/mock"
 import { TreeSitterParser } from "@codesoul/parser/tree-sitter"
@@ -45,7 +46,7 @@ import { LanceDBVectorStore } from "@codesoul/vector-store-lancedb"
 import { FixtureIndexer } from "@codesoul/indexer"
 import type { Indexer } from "@codesoul/indexer"
 
-export type Phase0Deps = {
+export type RuntimeDeps = {
 	parser: Parser
 	rig: RigExtractor
 	/**
@@ -69,9 +70,17 @@ export type Phase0Deps = {
 	config: IndexConfig
 }
 
-export type WirePhase0Env = Partial<Record<string, string>>
+// Backwards-compatible alias; migrate to RuntimeDeps.
+/** @deprecated Use RuntimeDeps instead. */
+export type Phase0Deps = RuntimeDeps
 
-export type WirePhase0Options = {
+export type WireEnv = Partial<Record<string, string>>
+
+// Backwards-compatible alias; migrate to WireEnv.
+/** @deprecated Use WireEnv instead. */
+export type WirePhase0Env = WireEnv
+
+export type WireOptions = {
 	/**
 	 * Optional pino logger. Defaults to a silent pino so tests and dry-run
 	 * smokes don't pollute stdout. The fallback wrappers wire `onFallback`
@@ -82,8 +91,12 @@ export type WirePhase0Options = {
 	 * Environment-variable bag used by the http wiring. Defaults to
 	 * `process.env`. Tests inject a stub map so we never read real env.
 	 */
-	env?: WirePhase0Env
+	env?: WireEnv
 }
+
+// Backwards-compatible alias; migrate to WireOptions.
+/** @deprecated Use WireOptions instead. */
+export type WirePhase0Options = WireOptions
 
 const buildParser = (mode: IndexConfig["parser"]): Parser => {
 	switch (mode) {
@@ -118,10 +131,39 @@ const buildRig = (config: IndexConfig): RigExtractor => {
 	return new RigDispatcher(extractors)
 }
 
-const buildSourceProvider = (env: WirePhase0Env): SourceProvider => {
+const buildSourceProvider = (env: WireEnv): SourceProvider => {
 	const repoPath = env.CODESOUL_REPO_PATH
 	if (repoPath) return new FileSystemSourceProvider(repoPath)
 	return new MockSourceProvider()
+}
+
+/**
+ * Build the ManifestStore from the provided profile.
+ *
+ * - "memory" (default): InMemoryManifestStore.
+ * - "local-persist": SqliteManifestStore with WAL at
+ *   the path given by CODESOUL_MANIFEST_PATH (defaults to
+ *   `.codesoul/manifest.db` in the repo root).
+ */
+const buildManifestStore = (
+	mode: IndexConfig["manifestStore"],
+	env: WireEnv,
+	logger: Logger,
+): ManifestStore => {
+	switch (mode) {
+		case "memory":
+			return new InMemoryManifestStore()
+		case "sqlite": {
+			const repoPath = env.CODESOUL_REPO_PATH
+			const dbPath =
+				env.CODESOUL_MANIFEST_PATH ??
+				(repoPath
+					? `${repoPath}/.codesoul/manifest.db`
+					: ":memory:")
+			logger.info({ dbPath }, "manifest store: sqlite")
+			return new SqliteManifestStore(dbPath)
+		}
+	}
 }
 
 /**
@@ -132,7 +174,7 @@ const buildSourceProvider = (env: WirePhase0Env): SourceProvider => {
  *   constructs a Neo4jGraphStore with `autoMigrate: true`. The adapter
  *   defers the actual driver session to the first call, and migrations
  *   run idempotently on the first write — so constructing it here does
- *   not hit the network and `wirePhase0` can stay synchronous.
+ *   not hit the network and `wireRuntime` can stay synchronous.
  *
  * There is intentionally no "fall back to mock" knob (mirroring the
  * LanceDB wiring, and unlike the HTTP embedder/reranker). Graph
@@ -141,7 +183,7 @@ const buildSourceProvider = (env: WirePhase0Env): SourceProvider => {
  */
 const buildGraphStore = (
 	mode: IndexConfig["graphStore"],
-	env: WirePhase0Env,
+	env: WireEnv,
 ): GraphStore => {
 	switch (mode) {
 		case "memory":
@@ -183,7 +225,7 @@ const buildGraphStore = (
  */
 const buildVectorStore = (
 	mode: IndexConfig["vectorStore"],
-	env: WirePhase0Env,
+	env: WireEnv,
 ): VectorStore => {
 	switch (mode) {
 		case "memory":
@@ -220,7 +262,7 @@ const buildVectorStore = (
  * stay byte-identical without env-var orchestration. Truthy values
  * accepted: "1", "true", "yes" (case-insensitive).
  */
-const isLatencyLoggingEnabled = (env: WirePhase0Env): boolean => {
+const isLatencyLoggingEnabled = (env: WireEnv): boolean => {
 	const raw = env.CODESOUL_LOG_LATENCY
 	if (!raw) return false
 	const lower = raw.toLowerCase()
@@ -229,7 +271,7 @@ const isLatencyLoggingEnabled = (env: WirePhase0Env): boolean => {
 
 const buildEmbedder = (
 	mode: IndexConfig["embedder"],
-	env: WirePhase0Env,
+	env: WireEnv,
 	logger: Logger,
 ): Embedder => {
 	const mock = new MockEmbedder()
@@ -277,7 +319,7 @@ const buildEmbedder = (
 const buildReranker = (
 	mode: IndexConfig["reranker"],
 	sourceProvider: SourceProvider,
-	env: WirePhase0Env,
+	env: WireEnv,
 	logger: Logger,
 ): Reranker => {
 	const mock = new MockReranker()
@@ -323,12 +365,12 @@ const buildReranker = (
 		: final
 }
 
-export const wirePhase0 = (
+export const wireRuntime = (
 	configOverrides: Partial<IndexConfig> = {},
-	options: WirePhase0Options = {},
-): Phase0Deps => {
-	const env: WirePhase0Env =
-		options.env ?? (process.env as WirePhase0Env)
+	options: WireOptions = {},
+): RuntimeDeps => {
+	const env: WireEnv =
+		options.env ?? (process.env as WireEnv)
 	const logger: Logger =
 		options.logger ?? pino({ level: env.CODESOUL_LOG_LEVEL ?? "silent" })
 	const config = IndexConfig.parse({
@@ -348,7 +390,7 @@ export const wirePhase0 = (
 		logger,
 	)
 	const summarizer = new MockSummarizer()
-	const manifestStore = new InMemoryManifestStore()
+	const manifestStore = buildManifestStore(config.manifestStore, env, logger)
 	const indexer = new FixtureIndexer({
 		parser,
 		rig,
@@ -371,3 +413,7 @@ export const wirePhase0 = (
 		config,
 	}
 }
+
+// Backwards-compatible alias; migrate to wireRuntime.
+/** @deprecated Use wireRuntime instead. */
+export const wirePhase0 = wireRuntime

@@ -4,12 +4,12 @@ import { MockParser } from "@codesoul/parser/mock"
 import { TreeSitterParser } from "@codesoul/parser/tree-sitter"
 import { RigDispatcher } from "@codesoul/rig/dispatcher"
 import { MockRigExtractor } from "@codesoul/rig/mock"
-import type { Phase0Deps } from "../wiring.js"
-import { wirePhase0 } from "../wiring.js"
+import type { RuntimeDeps } from "../wiring.js"
+import { wireRuntime } from "../wiring.js"
 import { buildProgram } from "../program.js"
 
-const makeDeps = (overrides: Partial<Phase0Deps> = {}): Phase0Deps => {
-	const base = wirePhase0()
+const makeDeps = (overrides: Partial<RuntimeDeps> = {}): RuntimeDeps => {
+	const base = wireRuntime()
 	return { ...base, ...overrides }
 }
 
@@ -77,8 +77,8 @@ describe("codesoul query --limit", () => {
 describe("codesoul index", () => {
 	it("calls indexer.indexRepository with parsed options", async () => {
 		const calls: Array<Record<string, unknown>> = []
-		const base = wirePhase0()
-		const deps: Phase0Deps = {
+		const base = wireRuntime()
+		const deps: RuntimeDeps = {
 			...base,
 			indexer: {
 				async indexRepository(input) {
@@ -117,8 +117,8 @@ describe("codesoul index", () => {
 
 	it("--parser regex uses the injected deps.indexer (no re-wire)", async () => {
 		let invocations = 0
-		const base = wirePhase0()
-		const deps: Phase0Deps = {
+		const base = wireRuntime()
+		const deps: RuntimeDeps = {
 			...base,
 			indexer: {
 				async indexRepository(input) {
@@ -148,8 +148,8 @@ describe("codesoul index", () => {
 
 	it("--parser tree-sitter bypasses the injected deps.indexer (proves re-wire)", async () => {
 		let invocations = 0
-		const base = wirePhase0()
-		const deps: Phase0Deps = {
+		const base = wireRuntime()
+		const deps: RuntimeDeps = {
 			...base,
 			indexer: {
 				async indexRepository(input) {
@@ -200,8 +200,8 @@ describe("codesoul index", () => {
 
 	it("--rig-extractors '' uses the injected deps.indexer (no re-wire)", async () => {
 		let invocations = 0
-		const base = wirePhase0()
-		const deps: Phase0Deps = {
+		const base = wireRuntime()
+		const deps: RuntimeDeps = {
 			...base,
 			indexer: {
 				async indexRepository(input) {
@@ -231,8 +231,8 @@ describe("codesoul index", () => {
 
 	it("--rig-extractors package-json bypasses the injected deps.indexer (proves re-wire)", async () => {
 		let invocations = 0
-		const base = wirePhase0()
-		const deps: Phase0Deps = {
+		const base = wireRuntime()
+		const deps: RuntimeDeps = {
 			...base,
 			indexer: {
 				async indexRepository(input) {
@@ -334,8 +334,8 @@ describe("codesoul index", () => {
 
 	it("--embedder mock uses the injected deps.indexer (no re-wire)", async () => {
 		let invocations = 0
-		const base = wirePhase0()
-		const deps: Phase0Deps = {
+		const base = wireRuntime()
+		const deps: RuntimeDeps = {
 			...base,
 			indexer: {
 				async indexRepository(input) {
@@ -365,8 +365,8 @@ describe("codesoul index", () => {
 
 	it("--reranker mock uses the injected deps.indexer (no re-wire)", async () => {
 		let invocations = 0
-		const base = wirePhase0()
-		const deps: Phase0Deps = {
+		const base = wireRuntime()
+		const deps: RuntimeDeps = {
 			...base,
 			indexer: {
 				async indexRepository(input) {
@@ -396,8 +396,8 @@ describe("codesoul index", () => {
 
 	it("--vector-store memory uses the injected deps.indexer (no re-wire)", async () => {
 		let invocations = 0
-		const base = wirePhase0()
-		const deps: Phase0Deps = {
+		const base = wireRuntime()
+		const deps: RuntimeDeps = {
 			...base,
 			indexer: {
 				async indexRepository(input) {
@@ -427,8 +427,8 @@ describe("codesoul index", () => {
 
 	it("--graph-store memory uses the injected deps.indexer (no re-wire)", async () => {
 		let invocations = 0
-		const base = wirePhase0()
-		const deps: Phase0Deps = {
+		const base = wireRuntime()
+		const deps: RuntimeDeps = {
 			...base,
 			indexer: {
 				async indexRepository(input) {
@@ -458,8 +458,8 @@ describe("codesoul index", () => {
 
 	it("--embedder http triggers a re-wire (which then fails fast on missing env vars)", async () => {
 		let invocations = 0
-		const base = wirePhase0()
-		const deps: Phase0Deps = {
+		const base = wireRuntime()
+		const deps: RuntimeDeps = {
 			...base,
 			indexer: {
 				async indexRepository(input) {
@@ -505,8 +505,8 @@ describe("codesoul index", () => {
 
 	it("--vector-store lancedb triggers a re-wire (which then fails fast on missing env var)", async () => {
 		let invocations = 0
-		const base = wirePhase0()
-		const deps: Phase0Deps = {
+		const base = wireRuntime()
+		const deps: RuntimeDeps = {
 			...base,
 			indexer: {
 				async indexRepository(input) {
@@ -546,8 +546,8 @@ describe("codesoul index", () => {
 
 	it("--graph-store neo4j triggers a re-wire (which then fails fast on missing env vars)", async () => {
 		let invocations = 0
-		const base = wirePhase0()
-		const deps: Phase0Deps = {
+		const base = wireRuntime()
+		const deps: RuntimeDeps = {
 			...base,
 			indexer: {
 				async indexRepository(input) {
@@ -592,27 +592,27 @@ describe("codesoul index", () => {
 	})
 })
 
-describe("wirePhase0", () => {
+describe("wireRuntime", () => {
 	it("defaults to regex parser (MockParser)", () => {
-		const deps = wirePhase0()
+		const deps = wireRuntime()
 		expect(deps.config.parser).toBe("regex")
 		expect(deps.parser).toBeInstanceOf(MockParser)
 	})
 
 	it("accepts an explicit { parser: 'regex' } override", () => {
-		const deps = wirePhase0({ parser: "regex" })
+		const deps = wireRuntime({ parser: "regex" })
 		expect(deps.config.parser).toBe("regex")
 		expect(deps.parser).toBeInstanceOf(MockParser)
 	})
 
 	it("selects TreeSitterParser when parser: 'tree-sitter'", () => {
-		const deps = wirePhase0({ parser: "tree-sitter" })
+		const deps = wireRuntime({ parser: "tree-sitter" })
 		expect(deps.config.parser).toBe("tree-sitter")
 		expect(deps.parser).toBeInstanceOf(TreeSitterParser)
 	})
 
 	it("keeps non-parser config fields at their defaults when overriding parser", () => {
-		const deps = wirePhase0({ parser: "tree-sitter" })
+		const deps = wireRuntime({ parser: "tree-sitter" })
 		expect(deps.config).toMatchObject({
 			parser: "tree-sitter",
 			graphStore: "memory",
@@ -625,7 +625,7 @@ describe("wirePhase0", () => {
 	})
 
 	it("end-to-end: tree-sitter wiring parses a Method via FixtureIndexer parser", async () => {
-		const deps = wirePhase0({ parser: "tree-sitter" })
+		const deps = wireRuntime({ parser: "tree-sitter" })
 		const result = await deps.parser.parseFile({
 			repoId: "r",
 			indexRunId: "run_test",
@@ -639,13 +639,13 @@ describe("wirePhase0", () => {
 	})
 
 	it("defaults rig to MockRigExtractor when rigExtractors is empty", () => {
-		const deps = wirePhase0()
+		const deps = wireRuntime()
 		expect(deps.config.rigExtractors).toEqual([])
 		expect(deps.rig).toBeInstanceOf(MockRigExtractor)
 	})
 
 	it("selects RigDispatcher when rigExtractors is non-empty", () => {
-		const deps = wirePhase0({
+		const deps = wireRuntime({
 			rigExtractors: ["package-json", "pyproject"],
 		})
 		expect(deps.config.rigExtractors).toEqual([
@@ -656,7 +656,7 @@ describe("wirePhase0", () => {
 	})
 
 	it("selects RigDispatcher when only spade is configured (Phase 7d)", () => {
-		const deps = wirePhase0({ rigExtractors: ["spade"] })
+		const deps = wireRuntime({ rigExtractors: ["spade"] })
 		expect(deps.rig).toBeInstanceOf(RigDispatcher)
 	})
 })
